@@ -94,6 +94,7 @@ def grammshidth_ortho(v, basis_vectors):
     norm = vector_norm(v_orth)
     if norm > 1e-12:
         v_orth = [x / norm for x in v_orth]
+        
     else:
         import random
         random.seed(42)
