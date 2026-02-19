@@ -163,7 +163,8 @@ def average_ascii(s):
     return total/len(s)
 
 def zadacha2_11(l):
-    return l.sort(key=average_ascii)
+    l.sort(key=average_ascii)
+    return l
 
 def mediana_str(s):
     a = [ord(c) for c in s]
@@ -174,7 +175,9 @@ def mediana_str(s):
     return (a[len(a)//2 - 1] + a[len(a)//2 + 1])/2
 
 def zadacha6_12(l):
-    return l.sort(key=mediana_str)
+    l.sort(key=mediana_str)
+    return l
+
 
 #???
 def metric_ascii9(s):
@@ -228,7 +231,7 @@ def zadacha11_15(l):
 def zadacha23(l):
     return sorted(l)[0], sorted(l)[1]
 def zadacha35(l, n):
-    return sorted(l, lambda x: abs(x - n))[0] + n
+    return sorted(l, key=lambda x: abs(x - n))[0] + n
 '''
 def closest_to_r(arr, R):
     if len(arr) == 0:
@@ -252,6 +255,33 @@ def zadacha59(l):
     return [x**2 for x in l if x >= 0 and x < 100 and l.count(x) > 2]
     
 def main():
-    print(zadacha10(["mk fjkdf dfhdsf", "fdjkf" ,"jdfk df"]))
+    print("zadacha1:", zadacha1(12))
+    print("zadacha2:", zadacha2(58374))
+    print("zadacha3:", zadacha3(18))
+
+    print("zadacha5_2:", zadacha5_2("abcdef"))
+    print("zadacha7:", zadacha7("ABBA"))
+    print("zadacha14:", zadacha14("кот собака слон тигр"))
+
+    print("zadacha5:", zadacha5("Сегодня 7 марта 2024 и 12 апреля 2023"))
+
+    print("zadacha5_6:", zadacha5_6("abcПривет123мир"))
+    print("zadacha7_7:", zadacha7_7("a5b3c9"))
+    print("zadacha14_8:", zadacha14_8("abc12345de99"))
+
+    print("zadacha9:", zadacha9(["aa", "b", "cccc", "ddd"]))
+    print("zadacha10:", zadacha10(["one two", "one", "one two three"]))
+
+    print("zadacha2_11:", zadacha2_11(["abc", "z", "hello"]))
+    print("zadacha6_12:", zadacha6_12(["abc", "zz", "hello"]))
+    print("zadacha9_13:", zadacha9_13(["abc", "zzz", "hello"]))
+    print("zadacha12_14:", zadacha12_14(["aaab", "bb", "cccccc"]))
+
+    print("zadacha11_15:", zadacha11_15([1,1,2,2,3,4,4]))
+    print("zadacha23:", zadacha23([9,3,5,1,7]))
+    print("zadacha35:", zadacha35([10,5,3,20], 6))
+    print("zadacha47:", zadacha47([6,8]))
+    print("zadacha59:", zadacha59([5,5,5,10,10,10,200,-3]))
+
 if __name__ == "__main__":
     main()
