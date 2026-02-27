@@ -1,3 +1,7 @@
+mean_val = bank['Loan_Balance'].mean()
+std_val = bank['Loan_Balance'].std()
+
+bank['Loan_Balance_Stand'] = (bank['Loan_Balance'] - mean_val) / std_val
 
 def matrix_multipli(A, v):
     n = len(A)
