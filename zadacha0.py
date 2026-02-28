@@ -1,7 +1,48 @@
-mean_val = bank['Loan_Balance'].mean()
-std_val = bank['Loan_Balance'].std()
+df['tr_day'] = df['tr_day'].astype(int)
 
-bank['Loan_Balance_Stand'] = (bank['Loan_Balance'] - mean_val) / std_val
+mcc_counts = df['mcc_code'].value_counts()
+popular_mcc = mcc_counts[mcc_counts > 60000].index
+df_filtered = df[df['mcc_code'].isin(popular_mcc)]
+
+grouped = (df_filtered.groupby(['tr_day', 'mcc_code'])['amount'].mean().unstack())
+
+mcc_labels = {
+    4814: "Телеком",
+    4829: "Денежные переводы",
+    5411: "Бакалейные магазины",
+    6010: "Финансовые институты",
+    6011: "Снятие наличных (ATM)"
+}
+grouped = grouped.rename(columns=mcc_labels)
+plt.figure(figsize=(12,6))
+
+grouped.plot(ax=plt.gca())
+
+plt.axhline(0, color='black', linewidth=1)
+
+plt.xlabel("Day")
+plt.ylabel("Average transaction amount")
+plt.title("MCC code average amount dynamics by day")
+
+# Легенда снизу
+plt.legend(
+    loc='upper center',
+    bbox_to_anchor=(0.5, -0.15),
+    ncol=2,
+    frameon=False
+)
+
+plt.tight_layout()
+plt.show()
+
+titanic['Age_group'] = pd.cut(
+    titanic['Age'],
+    bins=[0, 12, 18, 35, 60, 100],
+    labels=['Child', 'Teen', 'Young Adult', 'Adult', 'Senior']
+)
+age_surv = titanic.groupby('Survived')['Age'].mean()
+print(round(age_surv, 2))
+
 
 def matrix_multipli(A, v):
     n = len(A)
