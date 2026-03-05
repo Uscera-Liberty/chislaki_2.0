@@ -1,3 +1,4 @@
+Восьмая задача
 df['tr_day'] = df['tr_day'].astype(int)
 
 mcc_counts = df['mcc_code'].value_counts()
@@ -34,7 +35,7 @@ plt.legend(
 
 plt.tight_layout()
 plt.show()
-
+Задача с титаником
 titanic['Age_group'] = pd.cut(
     titanic['Age'],
     bins=[0, 12, 18, 35, 60, 100],
@@ -42,6 +43,46 @@ titanic['Age_group'] = pd.cut(
 )
 age_surv = titanic.groupby('Survived')['Age'].mean()
 print(round(age_surv, 2))
+Девятая задача: 
+wine = pd.read_csv('winemag-data-130k-v2.csv', on_bad_lines='skip', engine='python')
+
+wine = wine.dropna(subset=['points', 'price', 'country']) # Удаляем пропуски
+
+#a
+wine['price_clean'] = pd.to_numeric(wine['price'], errors='coerce')
+wine = wine.dropna(subset=['price_clean'])
+
+wine['points_clean'] = pd.to_numeric(wine['points'], errors='coerce')
+wine = wine.dropna(subset=['points_clean'])
+
+# wine_clean = wine[wine['price_clean'] < 200].copy()
+wine_clean = wine.copy()
+
+plt.figure(figsize=(12, 6))
+plt.scatter(wine_clean['points'], wine_clean['price_clean'], alpha = 0.3, s = 3)
+
+plt.xlabel("Points")
+plt.ylabel("Price ")
+plt.title("Points vs Price")
+
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# b
+wine_clean2 = wine[wine['country'].str.len() < 20].copy()
+country_counts = wine_clean2['country'].value_counts()
+
+plt.figure(figsize=(12,6))
+
+country_counts.plot(kind='bar')
+
+plt.xlabel("Country")
+plt.ylabel("Number of Wines")
+plt.title("Number of Wines by Country")
+
+plt.tight_layout()
+plt.show()
 
 
 def matrix_multipli(A, v):
