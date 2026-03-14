@@ -122,7 +122,7 @@ def iteration_single(A, x0=None, max_iter=100, epsilon=1e-12, verbose=True):
     for k in range(1, max_iter + 1):
         mu = rayleigh_quotient(A, x)
         history.append(mu)
-        
+        # A- lambda * E
         A_shifted = matrix_sub_I(A, mu)
         
         try:
@@ -278,7 +278,7 @@ if __name__ == "__main__":
     
     A1 = [
         [4, 1, 1],
-        [1, 3, 2],
+        [1, 3, 4],
         [1, 2, 2]
     ]
     
@@ -302,7 +302,6 @@ if __name__ == "__main__":
     ]
     
     print_matrix(A2)
-    print("Точное решение: lambda1 = 4.414213562373095, lambda2 = 1.585786437626905")
     
     eigenvalues2, eigenvectors2 = find_all_eigenpairs(A2, epsilon=1e-12, verbose=True)
     eigenvalues2, eigenvectors2 = sort_eigenvalues(eigenvalues2, eigenvectors2)
