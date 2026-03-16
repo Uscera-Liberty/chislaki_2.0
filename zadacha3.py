@@ -3,7 +3,7 @@ import math
 
 
 def exact_F1(t):
-    return [math.cos(t),
+    return [math.cos(t) +
             -math.sin(t)]
 
 def exact_F2(t):
