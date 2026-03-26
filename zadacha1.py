@@ -1,3 +1,50 @@
+def leaky_relu(x, alpha=0.01):
+    return np.where(x > 0, x, alpha * x)
+
+def leaky_relu_derivative(x, alpha=0.01):
+    return np.where(x > 0, 1.0, alpha)
+
+
+class NeuronLeakyReLU:
+    def __init__(self, w=None, b=0, alpha=0.01):   # ← исправили x → w
+        self.w = w
+        self.b = b
+        self.alpha = alpha
+
+    def activate(self, x):
+        return leaky_relu(x, self.alpha)
+
+    def forward_pass(self, X):  # ← x → X
+        n = X.shape[0]
+        z = X @ self.w + self.b
+        y_pred = self.activate(z)
+        return y_pred
+
+    def backward_pass(self, X, y, y_pred, learning_rate=0.005):
+        n = len(y)
+        y = np.array(y).reshape(-1, 1)
+
+        z = X @ self.w + self.b
+
+        delta = (y_pred - y) * leaky_relu_derivative(z, self.alpha)
+
+        grad_w = (X.T @ delta) / n
+        grad_b = np.mean(delta)
+
+        self.w -= learning_rate * grad_w
+        self.b -= learning_rate * grad_b
+
+    def fit(self, X, y, num_epochs=300):
+        Loss_values = []
+        for i in range(num_epochs):
+            y_pred = self.forward_pass(X)
+            Loss_values.append(Loss(y_pred, y))
+            self.backward_pass(X, y, y_pred)
+        return Loss_values
+
+
+
+
 def dot_product(v1, v2):
     return sum(a * b for a, b in zip(v1, v2))
 
