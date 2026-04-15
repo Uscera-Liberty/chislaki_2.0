@@ -1,4 +1,4 @@
-example = 2
+example = 1
 
 def fmt_vec(v, digits=6):
     return "(" + ", ".join(f"{value:.{digits}f}" for value in v) + ")"
@@ -223,12 +223,8 @@ def check_hessian_positive(H):
 
 
 def newton_method(x, eps1=0.1, eps2=0.15, M=10):
-    """
-    Метод Ньютона согласно алгоритму из презентации
-    """
-    #x = list(x0)
     k = 0
-    history = []
+    small_step_flag = False
 
     print(f"\n{'='*60}")
     print(f"МЕТОД НЬЮТОНА")
@@ -248,8 +244,7 @@ def newton_method(x, eps1=0.1, eps2=0.15, M=10):
 
         if grad_norm < eps1:
             print(f"  ✓ ‖∇f(x^{k})‖ < ε₁. Расчет окончен.")
-            history.append({'k': k, 'x': x[:], 'f': f(x), 'grad_norm': grad_norm})
-            return x, history
+            return x
 
         H = hessian(x)
         print(f"  H(x^{k}) = {H}")
@@ -296,39 +291,24 @@ def newton_method(x, eps1=0.1, eps2=0.15, M=10):
         print(f"  ‖x^{k+1} - x^{k}‖ = {x_diff:.6f}")
         print(f"  |f(x^{k+1}) - f(x^{k})| = {f_diff:.6f}")
 
-        history.append({'k': k, 'x': x[:], 'f': f_old, 'grad_norm': grad_norm})
-
-        if k > 0 and x_diff < eps2 and f_diff < eps2:
-            if history[-1].get('small_step', False):
+        if x_diff < eps2 and f_diff < eps2:
+            if small_step_flag:
                 print(f"  ✓ Условия выполнены два раза подряд. Расчет окончен.")
-                history.append({
-                    'k': k + 1,
-                    'x': x_new[:],
-                    'f': f_new,
-                    'grad_norm': vec_norm(grad_f(x_new))
-                })
-                return x_new, history
-            else:
-                history[-1]['small_step'] = True
+                return x_new
+            small_step_flag = True
         else:
-            if history:
-                history[-1]['small_step'] = False
+            small_step_flag = False
 
         x = x_new
         k += 1
         print()
 
     print(f"\nДостигнуто максимальное число итераций M = {M}")
-    return x, history
-
+    return x
 
 def newton_raphson_method(x, eps1=0.1, eps2=0.15, M=10):
-    """
-    Метод Ньютона-Рафсона с адаптивным поиском шага (Свенн + золотое сечение)
-    """
-    #x = list(x0)
     k = 0
-    history = []
+    small_step_flag = False
 
     print(f"\n{'='*60}")
     print(f"МЕТОД НЬЮТОНА-РАФСОНА")
@@ -348,8 +328,7 @@ def newton_raphson_method(x, eps1=0.1, eps2=0.15, M=10):
 
         if grad_norm < eps1:
             print(f"  ✓ ‖∇f(x^{k})‖ < ε₁. Расчет окончен.")
-            history.append({'k': k, 'x': x[:], 'f': f(x), 'grad_norm': grad_norm})
-            return x, history
+            return x
 
         H = hessian(x)
         print(f"  H(x^{k}) = {H}")
@@ -375,36 +354,27 @@ def newton_raphson_method(x, eps1=0.1, eps2=0.15, M=10):
         print(f"  Поиск оптимального шага t* (адаптивный: Свенн + золотое сечение)...")
 
         def phi(t):
-            x_t = vec_add(x, vec_scale(d, t))
-            return f(x_t)
+            return f(vec_add(x, vec_scale(d, t)))
 
         t0 = 0.0
         h = 0.1
         max_step = 100.0
 
-        phi0 = phi(t0)
-        phi1 = phi(t0 + h)
-
-        if phi1 < phi0:
+        if phi(t0 + h) < phi(t0):
             t_prev = t0
             t_curr = t0 + h
             step = h
             while True:
-                t_next = t_curr + step
-                if t_next > max_step:
-                    t_next = max_step
-                phi_next = phi(t_next)
-                if phi_next < phi(t_curr):
+                t_next = min(t_curr + step, max_step)
+                if phi(t_next) < phi(t_curr):
                     t_prev = t_curr
                     t_curr = t_next
                     step *= 2
                 else:
                     break
-            a = t_prev
-            b = t_next if t_next <= max_step else t_curr + step
+            a, b = t_prev, t_next
         else:
-            a = t0
-            b = t0 + h
+            a, b = t0, t0 + h
 
         if abs(b - a) < 1e-8:
             b = a + 1.0
@@ -449,31 +419,20 @@ def newton_raphson_method(x, eps1=0.1, eps2=0.15, M=10):
         print(f"  ‖x^{k+1} - x^{k}‖ = {x_diff:.6f}")
         print(f"  |f(x^{k+1}) - f(x^{k})| = {f_diff:.6f}")
 
-        history.append({'k': k, 'x': x[:], 'f': f_old, 'grad_norm': grad_norm})
-
-        if k > 0 and x_diff < eps2 and f_diff < eps2:
-            if history[-1].get('small_step', False):
+        if x_diff < eps2 and f_diff < eps2:
+            if small_step_flag:
                 print(f"  ✓ Условия выполнены два раза подряд. Расчет окончен.")
-                history.append({
-                    'k': k + 1,
-                    'x': x_new[:],
-                    'f': f_new,
-                    'grad_norm': vec_norm(grad_f(x_new))
-                })
-                return x_new, history
-            else:
-                history[-1]['small_step'] = True
+                return x_new
+            small_step_flag = True
         else:
-            if history:
-                history[-1]['small_step'] = False
+            small_step_flag = False
 
         x = x_new
         k += 1
         print()
 
     print(f"\nДостигнуто максимальное число итераций M = {M}")
-    return x, history
-
+    return x
 
 def main():
     x0 = [2.0, 2.0, 2.0] if example == 2 else [2.0, 2.0]
@@ -491,7 +450,7 @@ def main():
     print(f"РЕШЕНИЕ ЗАДАЧИ 10: {task_title}, x₀ = {fmt_vec(x0, 3)}")
     print("=" * 60)
 
-    x_newton, history_newton = newton_method(x0, eps1, eps2, M)
+    x_newton = newton_method(x0, eps1, eps2, M)
 
     print(f"\n{'='*60}")
     print(f"РЕЗУЛЬТАТ МЕТОДА НЬЮТОНА:")
@@ -499,9 +458,8 @@ def main():
     print(f"Найденная точка: x* = {fmt_vec(x_newton, 6)}")
     print(f"Значение функции: f(x*) = {f(x_newton):.6f}")
     print(f"Норма градиента: ‖∇f(x*)‖ = {vec_norm(grad_f(x_newton)):.6f}")
-    print(f"Количество итераций: {len(history_newton)}")
 
-    x_nr, history_nr = newton_raphson_method(x0, eps1, eps2, M)
+    x_nr = newton_raphson_method(x0, eps1, eps2, M)
 
     print(f"\n{'='*60}")
     print(f"РЕЗУЛЬТАТ МЕТОДА НЬЮТОНА-РАФСОНА:")
@@ -509,7 +467,6 @@ def main():
     print(f"Найденная точка: x* = {fmt_vec(x_nr, 6)}")
     print(f"Значение функции: f(x*) = {f(x_nr):.6f}")
     print(f"Норма градиента: ‖∇f(x*)‖ = {vec_norm(grad_f(x_nr)):.6f}")
-    print(f"Количество итераций: {len(history_nr)}")
 
     print(f"\n{'='*60}")
     print(f"АНАЛИЗ ТОЧКИ МИНИМУМА:")
