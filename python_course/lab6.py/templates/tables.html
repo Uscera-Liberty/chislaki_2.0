@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Просмотр таблиц</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        h2 {
+            color: white;
+            font-size: 2em;
+            margin: 40px 0 20px 0;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .back-btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: white;
+            color: #667eea;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(255,255,255,0.3);
+        }
+        
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 12px 35px rgba(0,0,0,0.3);
+        }
+        
+        .card-image {
+            width: 100%;
+            aspect-ratio: 1 / 1;   /* 🔥 делает квадрат */
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 80px;
+            color: white;
+            overflow: hidden;
+        }
+        
+        .card-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .card-content {
+            padding: 18px;
+        }
+        
+        .card-id {
+            background: #f0f0f0;
+            color: #666;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+        
+        .card-title {
+            font-size: 1.3em;
+            color: #333;
+            margin-bottom: 12px;
+            font-weight: bold;
+            min-height: 50px;
+        }
+        
+        .card-info {
+            color: #666;
+            line-height: 1.8;
+            font-size: 0.95em;
+        }
+        
+        .card-info div {
+            margin-bottom: 6px;
+        }
+        
+        .card-info strong {
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Просмотр всех таблиц</h1>
+            <a href="/" class="back-btn">← Назад на главную</a>
+        </header>
+        
+        <!-- ARTISTS -->
+        <h2>👨‍🎨 Художники (Artists)</h2>
+        <div class="cards-grid">
+            {% for artist in artists %}
+            <div class="card">
+                <div class="card-image">
+                    {% if artist[4] and artist[4] != 'default_artist.jpg' %}
+                        <img src="/static/images/{{ artist[4] }}" alt="{{ artist[1] }}" onerror="this.parentElement.innerHTML='👨‍🎨'">
+                    {% else %}
+                        👨‍🎨
+                    {% endif %}
+                </div>
+                <div class="card-content">
+                    <div class="card-id">ID: {{ artist[0] }}</div>
+                    <div class="card-title">{{ artist[1] }}</div>
+                    <div class="card-info">
+                        <div><strong>Год рождения:</strong> {{ artist[2] }}</div>
+                        <div><strong>Страна:</strong> {{ artist[3] }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- PAINTINGS -->
+        <h2>🎨 Картины (Paintings)</h2>
+        <div class="cards-grid">
+            {% for painting in paintings %}
+            <div class="card">
+                <div class="card-image">
+                    {% if painting[5] and painting[5] != 'default_painting.jpg' %}
+                        <img src="/static/images/{{ painting[5] }}" alt="{{ painting[1] }}" onerror="this.parentElement.innerHTML='🖼️'">
+                    {% else %}
+                        🖼️
+                    {% endif %}
+                </div>
+                <div class="card-content">
+                    <div class="card-id">ID: {{ painting[0] }}</div>
+                    <div class="card-title">{{ painting[1] }}</div>
+                    <div class="card-info">
+                        <div><strong>Художник:</strong> {{ painting[2] }}</div>
+                        <div><strong>Год:</strong> {{ painting[3] }}</div>
+                        <div><strong>Стиль:</strong> {{ painting[4] }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- EXHIBITIONS -->
+        <h2>🏛️ Выставки (Exhibitions)</h2>
+        <div class="cards-grid">
+            {% for exhibition in exhibitions %}
+            <div class="card">
+                <div class="card-image">
+                    {% if exhibition[5] and exhibition[5] != 'default_exhibition.jpg' %}
+                        <img src="/static/images/{{ exhibition[5] }}" alt="{{ exhibition[1] }}" onerror="this.parentElement.innerHTML='🏛️'">
+                    {% else %}
+                        🏛️
+                    {% endif %}
+                </div>
+                <div class="card-content">
+                    <div class="card-id">ID: {{ exhibition[0] }}</div>
+                    <div class="card-title">{{ exhibition[1] }}</div>
+                    <div class="card-info">
+                        <div><strong>Картина:</strong> {{ exhibition[2] }}</div>
+                        <div><strong>Дата:</strong> {{ exhibition[3] }}</div>
+                        <div><strong>Место:</strong> {{ exhibition[4] }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div style="text-align: center; margin: 40px 0;">
+            <a href="/" class="back-btn">← Назад на главную</a>
+        </div>
+    </div>
+</body>
+</html>

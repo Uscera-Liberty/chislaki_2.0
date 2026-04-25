@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add Artist</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .form-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background: #45a049; }
+        .back { 
+            display: inline-block;
+            margin-top: 15px;
+            color: #4CAF50;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <h1>🎨 Добавить художника</h1>
+        <form action="/artists" method="post">
+            <div class="form-group">
+                <label>Имя:</label>
+                <input type="text" name="name" required>
+            </div>
+            <div class="form-group">
+                <label>Год рождения:</label>
+                <input type="number" name="birth_year" required>
+            </div>
+            <div class="form-group">
+                <label>Страна:</label>
+                <input type="text" name="country" required>
+            </div>
+            <button type="submit">Добавить</button>
+        </form>
+        <a href="/" class="back">← Назад на главную</a>
+    </div>
+</body>
+</html>

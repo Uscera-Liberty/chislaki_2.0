@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .back-btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: white;
+            color: #667eea;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(255,255,255,0.3);
+        }
+        
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+        
+        .card-image {
+            width: 100%;
+            aspect-ratio: 1 / 1;   /* 🔥 делает квадрат */
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 80px;
+            color: white;
+            overflow: hidden;
+        }
+        
+        .card-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .card-content {
+            padding: 20px;
+        }
+        
+        .card-title {
+            font-size: 1.5em;
+            color: #333;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .card-count {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        
+        .card-details {
+            color: #666;
+            line-height: 1.6;
+            font-size: 0.95em;
+        }
+        
+        .empty-state {
+            text-align: center;
+            color: white;
+            font-size: 1.5em;
+            padding: 50px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 {{ title }}</h1>
+            <a href="/" class="back-btn">← Назад на главную</a>
+        </header>
+        
+        <div class="cards-grid">
+            {% if data %}
+                {% for item in data %}
+                <div class="card">
+                    <div class="card-image">
+                        {% if item[1] and item[1] != 'default_artist.jpg' and item[1] != 'default_painting.jpg' and item[1] != 'default_exhibition.jpg' %}
+                            <img src="/static/images/{{ item[1] }}" alt="{{ item[0] }}" onerror="this.parentElement.innerHTML='🎨'">
+                        {% else %}
+                            {% if type == 'artist' or type == 'artist_exhibitions' %}
+                                👨‍🎨
+                            {% elif type == 'style' %}
+                                🖌️
+                            {% elif type == 'location' %}
+                                🏛️
+                            {% else %}
+                                🎨
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    <div class="card-content">
+                        <div class="card-title">{{ item[0] }}</div>
+                        <div class="card-count">
+                            {% if type == 'artist' %}
+                                📊 {{ item[2] }} картин(ы)
+                            {% elif type == 'style' %}
+                                📊 {{ item[2] }} картин(ы)
+                            {% elif type == 'location' %}
+                                📊 {{ item[2] }} выставок(и)
+                            {% elif type == 'artist_exhibitions' %}
+                                📊 {{ item[2] }} выставок(и)
+                            {% endif %}
+                        </div>
+                        {% if item[3] %}
+                        <div class="card-details">
+                            <strong>
+                                {% if type == 'artist' or type == 'style' %}
+                                    Картины:
+                                {% elif type == 'location' or type == 'artist_exhibitions' %}
+                                    Выставки:
+                                {% endif %}
+                            </strong><br>
+                            {{ item[3] }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    😿 Нет данных для отображения
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

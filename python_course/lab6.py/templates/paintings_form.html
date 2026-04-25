@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add Painting</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .form-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background: #45a049; }
+        .back { 
+            display: inline-block;
+            margin-top: 15px;
+            color: #4CAF50;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <h1>🖼️ Добавить картину</h1>
+        <form action="/paintings" method="post">
+            <div class="form-group">
+                <label>Название:</label>
+                <input type="text" name="title" required>
+            </div>
+            <div class="form-group">
+                <label>Художник:</label>
+                <select name="artist_id" required>
+                    {% for artist in artists %}
+                    <option value="{{ artist[0] }}">{{ artist[1] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Год:</label>
+                <input type="number" name="year" required>
+            </div>
+            <div class="form-group">
+                <label>Стиль:</label>
+                <input type="text" name="style" required>
+            </div>
+            <button type="submit">Добавить</button>
+        </form>
+        <a href="/" class="back">← Назад на главную</a>
+    </div>
+</body>
+</html>
