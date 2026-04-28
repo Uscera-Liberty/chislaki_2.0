@@ -1,0 +1,228 @@
+ALTER TABLE CostItem 
+ADD COLUMN price   NUMERIC(12,2) NOT NULL DEFAULT 0,
+ADD COLUMN metrics VARCHAR(20)   NOT NULL DEFAULT 'шт';
+
+-- Или при создании с нуля:
+CREATE TABLE CostItem (
+    id        SERIAL PRIMARY KEY,
+    name      VARCHAR(100) NOT NULL,
+    price     NUMERIC(12,2) NOT NULL DEFAULT 0,
+    metrics   VARCHAR(20)   NOT NULL DEFAULT 'шт',
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE AdvanceReportLine (
+    id           SERIAL PRIMARY KEY,
+    report_id    INTEGER NOT NULL REFERENCES AdvanceReport(id) ON DELETE CASCADE,
+    cost_item_id INTEGER NOT NULL REFERENCES CostItem(id),
+    quantity     NUMERIC(10,3) NOT NULL DEFAULT 1
+    -- line_total считается триггером через цену из CostItem
+);
+
+-- ============================================================
+-- ТРИГГЕР 1: INSERT строки → прибавить к total_spent
+-- Цену берём из CostItem
+-- ============================================================
+CREATE OR REPLACE FUNCTION fn_insert_report_line()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_price      NUMERIC(12,2);
+    v_line_total NUMERIC(12,2);
+BEGIN
+    -- Берём цену из CostItem
+    SELECT price INTO v_price
+    FROM CostItem
+    WHERE id = NEW.cost_item_id;
+
+    v_line_total := NEW.quantity * v_price;
+
+    UPDATE AdvanceReport
+    SET total_spent = total_spent + v_line_total
+    WHERE id = NEW.report_id;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_insert_report_line
+AFTER INSERT ON AdvanceReportLine
+FOR EACH ROW EXECUTE PROCEDURE fn_insert_report_line();
+
+-- ============================================================
+-- ТРИГГЕР 2: DELETE строки → вычесть из total_spent
+-- ============================================================
+CREATE OR REPLACE FUNCTION fn_delete_report_line()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_price      NUMERIC(12,2);
+    v_line_total NUMERIC(12,2);
+BEGIN
+    SELECT price INTO v_price
+    FROM CostItem
+    WHERE id = OLD.cost_item_id;
+
+    v_line_total := OLD.quantity * v_price;
+
+    UPDATE AdvanceReport
+    SET total_spent = total_spent - v_line_total
+    WHERE id = OLD.report_id;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_delete_report_line
+AFTER DELETE ON AdvanceReportLine
+FOR EACH ROW EXECUTE PROCEDURE fn_delete_report_line();
+
+-- ============================================================
+-- ТРИГГЕР 3: UPDATE строки (изменили количество)
+-- ============================================================
+CREATE OR REPLACE FUNCTION fn_update_report_line()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_price          NUMERIC(12,2);
+    v_old_line_total NUMERIC(12,2);
+    v_new_line_total NUMERIC(12,2);
+BEGIN
+    SELECT price INTO v_price
+    FROM CostItem
+    WHERE id = NEW.cost_item_id;
+
+    v_old_line_total := OLD.quantity * v_price;
+    v_new_line_total := NEW.quantity * v_price;
+
+    UPDATE AdvanceReport
+    SET total_spent = total_spent - v_old_line_total + v_new_line_total
+    WHERE id = NEW.report_id;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_update_report_line
+AFTER UPDATE ON AdvanceReportLine
+FOR EACH ROW EXECUTE PROCEDURE fn_update_report_line();
+
+-- ============================================================
+-- ТРИГГЕР 4: INSERT выплаты → пересчитать налог
+--
+-- ЛОГИКА НАЛОГА:
+-- Если is_paid_first = TRUE → налог на всю сумму выплаты
+-- Если is_paid_first = FALSE → налог только на сумму превышения
+--   (total_spent - ранее выданный аванс, если потратил больше)
+--   превышение = total_spent - (total_paid ДО этой выплаты)
+-- ============================================================
+CREATE OR REPLACE FUNCTION fn_insert_cash_payment()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_report_date    DATE;
+    v_total_spent    NUMERIC(12,2);
+    v_total_paid_old NUMERIC(12,2);
+    v_is_paid_first  BOOLEAN;
+    v_taxable        NUMERIC(12,2) := 0;
+BEGIN
+    SELECT report_date, total_spent, total_paid, is_paid_first
+    INTO v_report_date, v_total_spent, v_total_paid_old, v_is_paid_first
+    FROM AdvanceReport
+    WHERE id = NEW.report_id;
+
+    -- Сначала обновляем total_paid
+    UPDATE AdvanceReport
+    SET total_paid = total_paid + NEW.amount
+    WHERE id = NEW.report_id;
+
+    -- Считаем облагаемую сумму
+    IF v_is_paid_first THEN
+        -- Случай: сначала потратил свои, потом получил компенсацию
+        -- Вся выплата облагается налогом
+        v_taxable := NEW.amount;
+    ELSE
+        -- Случай: получил аванс, но потратил БОЛЬШЕ чем получил
+        -- Налог только на превышение расходов над выданным авансом
+        -- Превышение = total_spent - (total_paid до этой выплаты)
+        IF v_total_spent > v_total_paid_old THEN
+            -- Есть превышение, часть или вся новая выплата покрывает долг
+            v_taxable := LEAST(NEW.amount, v_total_spent - v_total_paid_old);
+        ELSE
+            v_taxable := 0;
+        END IF;
+    END IF;
+
+    IF v_taxable > 0 THEN
+        UPDATE AdvanceReport
+        SET taxable_sum = taxable_sum + v_taxable,
+            tax_sum     = tax_sum + ROUND(v_taxable * 0.13, 2)
+        WHERE id = NEW.report_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_insert_cash_payment
+AFTER INSERT ON CashPayment
+FOR EACH ROW EXECUTE PROCEDURE fn_insert_cash_payment();
+
+-- ============================================================
+-- ТРИГГЕР 5: DELETE выплаты → откатить налог
+-- ============================================================
+CREATE OR REPLACE FUNCTION fn_delete_cash_payment()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_report_date    DATE;
+    v_total_spent    NUMERIC(12,2);
+    v_total_paid_new NUMERIC(12,2);
+    v_is_paid_first  BOOLEAN;
+    v_taxable        NUMERIC(12,2) := 0;
+BEGIN
+    SELECT report_date, total_spent, is_paid_first
+    INTO v_report_date, v_total_spent, v_is_paid_first
+    FROM AdvanceReport
+    WHERE id = OLD.report_id;
+
+    -- Сначала уменьшаем total_paid и получаем новое значение
+    UPDATE AdvanceReport
+    SET total_paid = total_paid - OLD.amount
+    WHERE id = OLD.report_id;
+
+    SELECT total_paid INTO v_total_paid_new
+    FROM AdvanceReport WHERE id = OLD.report_id;
+
+    -- Откатываем налог по той же логике
+    IF v_is_paid_first THEN
+        v_taxable := OLD.amount;
+    ELSE
+        IF v_total_spent > v_total_paid_new THEN
+            v_taxable := LEAST(OLD.amount, v_total_spent - v_total_paid_new);
+        ELSE
+            v_taxable := 0;
+        END IF;
+    END IF;
+
+    IF v_taxable > 0 THEN
+        UPDATE AdvanceReport
+        SET taxable_sum = GREATEST(0, taxable_sum - v_taxable),
+            tax_sum     = GREATEST(0, tax_sum - ROUND(v_taxable * 0.13, 2))
+        WHERE id = OLD.report_id;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_delete_cash_payment
+AFTER DELETE ON CashPayment
+FOR EACH ROW EXECUTE PROCEDURE fn_delete_cash_payment(); -- Строки отчёта — цена и итог берутся из CostItem
+SELECT 
+    arl.id,
+    arl.cost_item_id,
+    ci.name                            AS cost_item_name,
+    ci.metrics                         AS unit,
+    ci.price                           AS unit_price,
+    arl.quantity,
+    ROUND(arl.quantity * ci.price, 2)  AS line_total
+FROM AdvanceReportLine arl
+JOIN CostItem ci ON ci.id = arl.cost_item_id
+WHERE arl.report_id = @ReportId
+ORDER BY arl.id;
