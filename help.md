@@ -948,3 +948,224 @@ DateTime periodEnd = DateTime.Parse(periodEndStr);
 
 worksheet.Cells[4, 2] = reportDate.ToString("dd.MM.yyyy");
 worksheet.Cells[5, 2] = periodStart.ToString("dd.MM.yyyy") + " – " + periodEnd.ToString("dd.MM.yyyy");
+
+
+
+
+using Npgsql;
+using System;
+using System.Data;
+using System.Drawing;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+
+namespace MyZadacha
+{
+    public class ReportExcel : Form
+    {
+        private NpgsqlConnection con;
+        private int reportId;
+        private Button btnExport;
+        private Button btnCancel;
+        private Label lblInfo;
+
+        public ReportExcel(NpgsqlConnection connection, int id)
+        {
+            con = connection;
+            reportId = id;
+            InitializeComponent();
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = "Экспорт отчёта в Excel";
+            this.Size = new Size(400, 150);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+
+            lblInfo = new Label
+            {
+                Text = $"Экспорт авансового отчёта №{reportId}",
+                Location = new Point(20, 30),
+                Size = new Size(350, 30),
+                Font = new Font("Arial", 12, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            btnExport = new Button
+            {
+                Text = "Выгрузить в Excel",
+                Location = new Point(50, 80),
+                Size = new Size(130, 30),
+                BackColor = Color.LightGreen
+            };
+            btnExport.Click += BtnExport_Click;
+
+            btnCancel = new Button
+            {
+                Text = "Отмена",
+                Location = new Point(200, 80),
+                Size = new Size(130, 30)
+            };
+            btnCancel.Click += (s, e) => Close();
+
+            Controls.Add(lblInfo);
+            Controls.Add(btnExport);
+            Controls.Add(btnCancel);
+        }
+
+        private void BtnExport_Click(object sender, EventArgs e)
+        {
+            ExportToExcel();
+        }
+
+        private void ExportToExcel()
+        {
+            DataRow header = null;
+            DataTable lines = null;
+
+            try
+            {
+                string sqlHeader = $@"SELECT ar.id, e.name AS employee_name, ar.report_date,
+                        ar.period_start, ar.period_end, ar.purpose,
+                        ar.total_spent, ar.total_paid, ar.taxable_sum, ar.tax_sum
+                        FROM advancereport ar
+                        JOIN employee e ON e.id = ar.employee_id
+                        WHERE ar.id = {reportId}";
+                NpgsqlDataAdapter daH = new NpgsqlDataAdapter(sqlHeader, con);
+                DataSet dsH = new DataSet();
+                daH.Fill(dsH);
+                if (dsH.Tables[0].Rows.Count == 0)
+                {
+                    MessageBox.Show("Отчёт не найден!", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                header = dsH.Tables[0].Rows[0];
+
+                string sqlLines = $@"SELECT ci.name AS cost_item_name, ci.metrics, arl.quantity,
+                        ci.price, ROUND(arl.quantity * ci.price, 2) AS line_total
+                        FROM advancereportline arl
+                        JOIN costitem ci ON ci.id = arl.cost_item_id
+                        WHERE arl.report_id = {reportId}";
+                NpgsqlDataAdapter daL = new NpgsqlDataAdapter(sqlLines, con);
+                DataSet dsL = new DataSet();
+                daL.Fill(dsL);
+                lines = dsL.Tables[0];
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка данных: " + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Excel.Application excelApp = null;
+            Excel.Workbook workbook = null;
+            Excel.Worksheet worksheet = null;
+
+            try
+            {
+                excelApp = new Excel.Application();
+                excelApp.DisplayAlerts = false;
+                workbook = excelApp.Workbooks.Add();
+                worksheet = (Excel.Worksheet)workbook.Worksheets[1];
+                worksheet.Name = "Авансовый отчёт";
+
+                worksheet.Cells[1, 1] = $"АВАНСОВЫЙ ОТЧЁТ № {reportId}";
+                Excel.Range titleRange = worksheet.Range[worksheet.Cells[1, 1], worksheet.Cells[1, 6]];
+                titleRange.Merge();
+                titleRange.Font.Bold = true;
+                titleRange.Font.Size = 14;
+                titleRange.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
+
+                worksheet.Cells[3, 1] = "Сотрудник:";
+                worksheet.Cells[3, 2] = header["employee_name"].ToString();
+                worksheet.Cells[3, 2].Font.Bold = true;
+                worksheet.Cells[4, 1] = "Дата отчёта:";
+                
+                // ========== ИСПРАВЛЕНИЕ ДЛЯ ДАТ ==========
+                string reportDateStr = header["report_date"].ToString();
+                string periodStartStr = header["period_start"].ToString();
+                string periodEndStr = header["period_end"].ToString();
+                
+                DateTime reportDate = DateTime.Parse(reportDateStr);
+                DateTime periodStart = DateTime.Parse(periodStartStr);
+                DateTime periodEnd = DateTime.Parse(periodEndStr);
+                
+                worksheet.Cells[4, 2] = reportDate.ToString("dd.MM.yyyy");
+                worksheet.Cells[5, 1] = "Период:";
+                worksheet.Cells[5, 2] = periodStart.ToString("dd.MM.yyyy") + " – " + periodEnd.ToString("dd.MM.yyyy");
+                worksheet.Cells[6, 1] = "Цель:";
+                worksheet.Cells[6, 2] = header["purpose"].ToString();
+
+                int hRow = 8;
+                string[] cols = { "№", "Статья затрат", "Ед.изм", "Кол-во", "Цена", "Итого" };
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    worksheet.Cells[hRow, i + 1] = cols[i];
+                    Excel.Range cell = worksheet.Cells[hRow, i + 1];
+                    cell.Font.Bold = true;
+                    cell.Interior.Color = Color.FromArgb(68, 114, 196);
+                    cell.Font.Color = Color.White;
+                }
+
+                int row = hRow + 1;
+                int num = 1;
+                foreach (DataRow line in lines.Rows)
+                {
+                    worksheet.Cells[row, 1] = num++;
+                    worksheet.Cells[row, 2] = line["cost_item_name"].ToString();
+                    worksheet.Cells[row, 3] = line["metrics"].ToString();
+                    worksheet.Cells[row, 4] = Convert.ToDecimal(line["quantity"]);
+                    worksheet.Cells[row, 5] = Convert.ToDecimal(line["price"]);
+                    worksheet.Cells[row, 6] = Convert.ToDecimal(line["line_total"]);
+                    if (row % 2 == 0)
+                    {
+                        Excel.Range range = worksheet.Range[worksheet.Cells[row, 1], worksheet.Cells[row, 6]];
+                        range.Interior.Color = Color.FromArgb(235, 241, 251);
+                    }
+                    row++;
+                }
+
+                int tRow = row + 1;
+                worksheet.Cells[tRow, 5] = "Итого расходов:"; worksheet.Cells[tRow, 5].Font.Bold = true;
+                worksheet.Cells[tRow, 6] = Convert.ToDecimal(header["total_spent"]); worksheet.Cells[tRow, 6].Font.Bold = true;
+                worksheet.Cells[tRow + 1, 5] = "Выплачено из кассы:"; worksheet.Cells[tRow + 1, 5].Font.Bold = true;
+                worksheet.Cells[tRow + 1, 6] = Convert.ToDecimal(header["total_paid"]); worksheet.Cells[tRow + 1, 6].Font.Bold = true;
+                worksheet.Cells[tRow + 2, 5] = "Облагаемая сумма:"; worksheet.Cells[tRow + 2, 5].Font.Bold = true;
+                worksheet.Cells[tRow + 2, 6] = Convert.ToDecimal(header["taxable_sum"]); worksheet.Cells[tRow + 2, 6].Font.Bold = true;
+                Excel.Range rngYellow = worksheet.Range[worksheet.Cells[tRow + 2, 5], worksheet.Cells[tRow + 2, 6]];
+                rngYellow.Interior.Color = Color.FromArgb(255, 230, 153);
+                worksheet.Cells[tRow + 3, 5] = "Налог (13%):"; worksheet.Cells[tRow + 3, 5].Font.Bold = true;
+                worksheet.Cells[tRow + 3, 6] = Convert.ToDecimal(header["tax_sum"]); worksheet.Cells[tRow + 3, 6].Font.Bold = true;
+                rngYellow = worksheet.Range[worksheet.Cells[tRow + 3, 5], worksheet.Cells[tRow + 3, 6]];
+                rngYellow.Interior.Color = Color.FromArgb(255, 230, 153);
+
+                worksheet.Columns[1].ColumnWidth = 5;
+                worksheet.Columns[2].ColumnWidth = 30;
+                worksheet.Columns[3].ColumnWidth = 10;
+                worksheet.Columns[4].ColumnWidth = 10;
+                worksheet.Columns[5].ColumnWidth = 14;
+                worksheet.Columns[6].ColumnWidth = 14;
+
+                string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"Report_{reportId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
+                workbook.SaveAs(path);
+                MessageBox.Show($"Файл сохранён:\n{path}", "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
+                Close();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка Excel: " + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (workbook != null) workbook.Close(false);
+                if (excelApp != null) excelApp.Quit();
+                if (worksheet != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(worksheet);
+                if (workbook != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook);
+                if (excelApp != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp);
+            }
+        }
+    }
+}
