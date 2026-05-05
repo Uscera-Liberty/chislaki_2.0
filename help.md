@@ -1436,3 +1436,317 @@ namespace MyZadacha
         }
     }
 }
+
+
+
+
+
+using Npgsql;
+using System;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Windows.Forms;
+using Excel = Microsoft.Office.Interop.Excel;
+
+namespace MyZadacha
+{
+    public class PieChartForm : Form
+    {
+        private NpgsqlConnection con;
+        private DateTimePicker dtpStart;
+        private DateTimePicker dtpEnd;
+        private CheckedListBox clbCostItems;  // ← для выбора статей
+        private Button btnBuild;
+        private Button btnCancel;
+        private Label lblInfo;
+
+        public PieChartForm(NpgsqlConnection connection)
+        {
+            con = connection;
+            InitializeComponent();
+            LoadCostItems();  // ← загружаем статьи при открытии
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = "Круговая диаграмма по сотрудникам (выбранные статьи)";
+            this.Size = new Size(550, 500);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+
+            lblInfo = new Label
+            {
+                Text = "Выберите период и статьи затрат:",
+                Location = new Point(20, 20),
+                Size = new Size(500, 25),
+                Font = new Font("Arial", 10, FontStyle.Bold)
+            };
+
+            // Период
+            Label lblStart = new Label { Text = "Начало периода:", Location = new Point(30, 60), Size = new Size(120, 25) };
+            dtpStart = new DateTimePicker { Location = new Point(160, 60), Size = new Size(140, 25), Format = DateTimePickerFormat.Short };
+
+            Label lblEnd = new Label { Text = "Конец периода:", Location = new Point(30, 100), Size = new Size(120, 25) };
+            dtpEnd = new DateTimePicker { Location = new Point(160, 100), Size = new Size(140, 25), Format = DateTimePickerFormat.Short };
+
+            // Список статей затрат с чекбоксами
+            Label lblItems = new Label { Text = "Статьи затрат (можно выбрать несколько):", Location = new Point(30, 140), Size = new Size(250, 25), Font = new Font("Arial", 9, FontStyle.Bold) };
+            clbCostItems = new CheckedListBox
+            {
+                Location = new Point(30, 170),
+                Size = new Size(480, 200),
+                CheckOnClick = true
+            };
+
+            // Кнопки
+            btnBuild = new Button
+            {
+                Text = "Построить диаграмму",
+                Location = new Point(60, 400),
+                Size = new Size(180, 35),
+                BackColor = Color.LightGreen
+            };
+            btnBuild.Click += BtnBuild_Click;
+
+            btnCancel = new Button
+            {
+                Text = "Отмена",
+                Location = new Point(280, 400),
+                Size = new Size(120, 35)
+            };
+            btnCancel.Click += (s, e) => Close();
+
+            // Добавляем все элементы
+            Controls.Add(lblInfo);
+            Controls.Add(lblStart);
+            Controls.Add(dtpStart);
+            Controls.Add(lblEnd);
+            Controls.Add(dtpEnd);
+            Controls.Add(lblItems);
+            Controls.Add(clbCostItems);
+            Controls.Add(btnBuild);
+            Controls.Add(btnCancel);
+        }
+
+        private void LoadCostItems()
+        {
+            try
+            {
+                string sql = "SELECT id, name FROM costitem ORDER BY name";
+                NpgsqlDataAdapter da = new NpgsqlDataAdapter(sql, con);
+                DataTable dt = new DataTable();
+                da.Fill(dt);
+
+                clbCostItems.DisplayMember = "name";
+                clbCostItems.ValueMember = "id";
+                foreach (DataRow row in dt.Rows)
+                {
+                    clbCostItems.Items.Add(new CostItemRow
+                    {
+                        Id = Convert.ToInt32(row["id"]),
+                        Name = row["name"].ToString()
+                    });
+                }
+
+                // По умолчанию выбираем все статьи
+                for (int i = 0; i < clbCostItems.Items.Count; i++)
+                    clbCostItems.SetItemChecked(i, true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка загрузки статей: " + ex.Message);
+            }
+        }
+
+        private void BtnBuild_Click(object sender, EventArgs e)
+        {
+            // Проверка: выбраны ли статьи
+            var selectedItems = clbCostItems.CheckedItems;
+            if (selectedItems.Count == 0)
+            {
+                MessageBox.Show("Выберите хотя бы одну статью затрат!", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            ExportPieChartToExcel();
+        }
+
+        private void ExportPieChartToExcel()
+        {
+            DataTable dt = GetDataFromDb();
+            if (dt == null || dt.Rows.Count == 0)
+            {
+                MessageBox.Show("Нет данных за выбранный период по выбранным статьям.", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Агрегация по СОТРУДНИКАМ (каждый сектор диаграммы – сотрудник)
+            var byEmployee = dt.AsEnumerable()
+                .GroupBy(r => r["employee_name"].ToString())
+                .Select(g => new
+                {
+                    Name = g.Key,
+                    Total = g.Sum(r => Convert.ToDecimal(r["total_amount"]))
+                })
+                .OrderByDescending(x => x.Total)
+                .ToList();
+
+            Excel.Application excelApp = null;
+            Excel.Workbook workbook = null;
+            Excel.Worksheet wsChart = null;
+            Excel.Worksheet wsDetail = null;
+
+            try
+            {
+                excelApp = new Excel.Application();
+                excelApp.DisplayAlerts = false;
+                workbook = excelApp.Workbooks.Add();
+
+                // ========== ЛИСТ 1: Круговая диаграмма по сотрудникам ==========
+                wsChart = (Excel.Worksheet)workbook.Worksheets[1];
+                wsChart.Name = "Диаграмма по сотрудникам";
+
+                // Заголовки
+                wsChart.Cells[1, 1] = "Сотрудник";
+                wsChart.Cells[1, 2] = "Сумма расходов";
+                Excel.Range headerRange = wsChart.Range[wsChart.Cells[1, 1], wsChart.Cells[1, 2]];
+                headerRange.Font.Bold = true;
+                headerRange.Interior.Color = Color.FromArgb(68, 114, 196);
+                headerRange.Font.Color = Color.White;
+
+                int row = 2;
+                foreach (var emp in byEmployee)
+                {
+                    wsChart.Cells[row, 1] = emp.Name;
+                    wsChart.Cells[row, 2] = emp.Total;
+                    row++;
+                }
+                int lastRow = row - 1;
+
+                // Создание круговой диаграммы
+                Excel.ChartObjects chartObjects = (Excel.ChartObjects)wsChart.ChartObjects();
+                Excel.ChartObject chartObj = chartObjects.Add(100, 50, 450, 350);
+                Excel.Chart chart = chartObj.Chart;
+                chart.ChartType = Excel.XlChartType.xlPie;
+
+                Excel.Range dataRange = wsChart.Range[wsChart.Cells[2, 2], wsChart.Cells[lastRow, 2]];
+                Excel.Range categoryRange = wsChart.Range[wsChart.Cells[2, 1], wsChart.Cells[lastRow, 1]];
+
+                chart.SetSourceData(dataRange);
+                chart.SeriesCollection(1).XValues = categoryRange;
+                chart.HasTitle = true;
+                chart.ChartTitle.Text = $"Расходы по сотрудникам за период (выбранные статьи)";
+                chart.ApplyDataLabels(Excel.XlDataLabelsType.xlDataLabelsShowPercent, 
+                                       true, false, false, false, true);
+
+                // ========== ЛИСТ 2: Детализация (статья → сотрудник → сумма) ==========
+                wsDetail = (Excel.Worksheet)workbook.Worksheets.Add();
+                wsDetail.Move(After: wsChart);
+                wsDetail.Name = "Детализация";
+
+                string[] cols = { "Статья затрат", "Сотрудник", "Сумма" };
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    wsDetail.Cells[1, i + 1] = cols[i];
+                    Excel.Range cell = wsDetail.Cells[1, i + 1];
+                    cell.Font.Bold = true;
+                    cell.Interior.Color = Color.FromArgb(68, 114, 196);
+                    cell.Font.Color = Color.White;
+                }
+
+                int dRow = 2;
+                foreach (DataRow dr in dt.Rows)
+                {
+                    wsDetail.Cells[dRow, 1] = dr["cost_item_name"].ToString();
+                    wsDetail.Cells[dRow, 2] = dr["employee_name"].ToString();
+                    wsDetail.Cells[dRow, 3] = Convert.ToDecimal(dr["total_amount"]);
+                    dRow++;
+                }
+
+                wsDetail.Columns[1].ColumnWidth = 30;
+                wsDetail.Columns[2].ColumnWidth = 30;
+                wsDetail.Columns[3].ColumnWidth = 15;
+
+                // Сохранение
+                string path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                    $"PieChart_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
+
+                workbook.SaveAs(path);
+                MessageBox.Show($"Диаграмма сохранена:\n{path}", "Готово",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                { FileName = path, UseShellExecute = true });
+                Close();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка при создании диаграммы: " + ex.Message,
+                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (workbook != null) workbook.Close(false);
+                if (excelApp != null) excelApp.Quit();
+                if (wsChart != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsChart);
+                if (wsDetail != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsDetail);
+                if (workbook != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook);
+                if (excelApp != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp);
+            }
+        }
+
+        private DataTable GetDataFromDb()
+        {
+            DataTable result = new DataTable();
+            try
+            {
+                // Получаем ID выбранных статей
+                var selectedIds = clbCostItems.CheckedItems
+                    .Cast<CostItemRow>()
+                    .Select(x => x.Id.ToString())
+                    .ToArray();
+                
+                string idsParam = string.Join(",", selectedIds);
+
+                string sql = $@"
+                    SELECT 
+                        ci.name AS cost_item_name,
+                        e.name AS employee_name,
+                        SUM(arl.quantity * ci.price) AS total_amount
+                    FROM advancereportline arl
+                    JOIN costitem ci ON ci.id = arl.cost_item_id
+                    JOIN advancereport ar ON ar.id = arl.report_id
+                    JOIN employee e ON e.id = ar.employee_id
+                    WHERE ar.report_date::date BETWEEN :startDate AND :endDate
+                      AND ci.id IN ({idsParam})
+                    GROUP BY ci.name, e.name
+                    ORDER BY e.name, ci.name";
+
+                NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+                cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
+                cmd.Parameters.AddWithValue("endDate", dtpEnd.Value.Date);
+                NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
+                da.Fill(result);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка загрузки данных: " + ex.Message,
+                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return null;
+            }
+            return result;
+        }
+
+        // Вспомогательный класс для чекбоксов
+        private class CostItemRow
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+            public override string ToString() => Name;
+        }
+    }
+}
