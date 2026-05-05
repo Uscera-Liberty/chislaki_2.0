@@ -936,3 +936,15 @@ private void btnExportPie_Click(object sender, EventArgs e)
 - В `AddCostitem.cs` → заменить `button1_Click`
 - В `AddReportLine.cs` → заменить `Update()` и `button1_Click_1`
 - На все числовые `TextBox` → повесить событие `KeyPress` с проверкой символов
+// Просто берём строку и форматируем (самый надёжный способ)
+string reportDateStr = header["report_date"].ToString();
+string periodStartStr = header["period_start"].ToString();
+string periodEndStr = header["period_end"].ToString();
+
+// Если строка в формате "2024-12-25" или "2024-12-25 00:00:00"
+DateTime reportDate = DateTime.Parse(reportDateStr);
+DateTime periodStart = DateTime.Parse(periodStartStr);
+DateTime periodEnd = DateTime.Parse(periodEndStr);
+
+worksheet.Cells[4, 2] = reportDate.ToString("dd.MM.yyyy");
+worksheet.Cells[5, 2] = periodStart.ToString("dd.MM.yyyy") + " – " + periodEnd.ToString("dd.MM.yyyy");
