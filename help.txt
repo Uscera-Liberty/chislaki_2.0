@@ -2,7 +2,6 @@ using Npgsql;
 using System;
 using System.Data;
 using System.Drawing;
-using System.Linq;
 using System.Windows.Forms;
 using Excel = Microsoft.Office.Interop.Excel;
 
@@ -26,7 +25,7 @@ namespace MyZadacha
         private void InitializeComponent()
         {
             this.Text = "Налоговый отчёт за период (Excel)";
-            this.Size = new Size(450, 180);
+            this.Size = new Size(450, 200);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -106,15 +105,16 @@ namespace MyZadacha
                 titleRange.Font.Size = 14;
                 titleRange.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
 
-                // Период
+                // Период и дата формирования
                 string startStr = dtpStart.Value.ToString("dd.MM.yyyy");
                 string endStr = dtpEnd.Value.ToString("dd.MM.yyyy");
                 worksheet.Cells[3, 1] = $"Период: {startStr} – {endStr}";
                 worksheet.Cells[3, 1].Font.Bold = true;
+                worksheet.Cells[4, 1] = $"Дата формирования: {DateTime.Now:dd.MM.yyyy HH:mm}";
 
                 // Шапка таблицы
-                int hRow = 5;
-                string[] cols = { "Сотрудник", "Облагаемая налогом сумма (руб.)", "Сумма налога 13% (руб.)" };
+                int hRow = 6;
+                string[] cols = { "Сотрудник", "Сумма расходов (руб.)", "Выдано из кассы (руб.)", "Облагаемая налогом сумма (руб.)", "Сумма налога 13% (руб.)" };
                 for (int i = 0; i < cols.Length; i++)
                 {
                     worksheet.Cells[hRow, i + 1] = cols[i];
@@ -127,28 +127,33 @@ namespace MyZadacha
 
                 // Заполнение данных
                 int row = hRow + 1;
+                decimal totalSpent = 0;
+                decimal totalPaid = 0;
                 decimal totalTaxable = 0;
                 decimal totalTax = 0;
 
                 foreach (DataRow dr in reportData.Rows)
                 {
                     string employeeName = dr["employee_name"].ToString();
+                    decimal spent = Convert.ToDecimal(dr["total_spent"]);
+                    decimal paid = Convert.ToDecimal(dr["total_paid"]);
                     decimal taxable = Convert.ToDecimal(dr["taxable_sum"]);
                     decimal tax = Convert.ToDecimal(dr["tax_sum"]);
 
                     worksheet.Cells[row, 1] = employeeName;
-                    worksheet.Cells[row, 2] = taxable;
-                    worksheet.Cells[row, 3] = tax;
+                    worksheet.Cells[row, 2] = spent;
+                    worksheet.Cells[row, 3] = paid;
+                    worksheet.Cells[row, 4] = taxable;
+                    worksheet.Cells[row, 5] = tax;
 
-                    worksheet.Cells[row, 2].NumberFormat = "#,##0.00";
-                    worksheet.Cells[row, 3].NumberFormat = "#,##0.00";
-
+                    totalSpent += spent;
+                    totalPaid += paid;
                     totalTaxable += taxable;
                     totalTax += tax;
 
                     if (row % 2 == 0)
                     {
-                        Excel.Range range = worksheet.Range[worksheet.Cells[row, 1], worksheet.Cells[row, 3]];
+                        Excel.Range range = worksheet.Range[worksheet.Cells[row, 1], worksheet.Cells[row, 5]];
                         range.Interior.Color = Color.FromArgb(235, 241, 251);
                     }
                     row++;
@@ -158,20 +163,28 @@ namespace MyZadacha
                 int tRow = row + 1;
                 worksheet.Cells[tRow, 1] = "ИТОГО:";
                 worksheet.Cells[tRow, 1].Font.Bold = true;
-                worksheet.Cells[tRow, 2] = totalTaxable;
+                worksheet.Cells[tRow, 2] = totalSpent;
                 worksheet.Cells[tRow, 2].Font.Bold = true;
-                worksheet.Cells[tRow, 3] = totalTax;
+                worksheet.Cells[tRow, 3] = totalPaid;
                 worksheet.Cells[tRow, 3].Font.Bold = true;
-                worksheet.Cells[tRow, 2].NumberFormat = "#,##0.00";
-                worksheet.Cells[tRow, 3].NumberFormat = "#,##0.00";
+                worksheet.Cells[tRow, 4] = totalTaxable;
+                worksheet.Cells[tRow, 4].Font.Bold = true;
+                worksheet.Cells[tRow, 5] = totalTax;
+                worksheet.Cells[tRow, 5].Font.Bold = true;
 
-                Excel.Range totalRange = worksheet.Range[worksheet.Cells[tRow, 1], worksheet.Cells[tRow, 3]];
+                Excel.Range totalRange = worksheet.Range[worksheet.Cells[tRow, 1], worksheet.Cells[tRow, 5]];
                 totalRange.Interior.Color = Color.FromArgb(255, 230, 153);
+
+                // Формат чисел
+                Excel.Range numberRange = worksheet.Range[worksheet.Cells[hRow + 1, 2], worksheet.Cells[tRow, 5]];
+                numberRange.NumberFormat = "#,##0.00";
 
                 // Автоширина
                 worksheet.Columns[1].ColumnWidth = 30;
-                worksheet.Columns[2].ColumnWidth = 25;
-                worksheet.Columns[3].ColumnWidth = 20;
+                worksheet.Columns[2].ColumnWidth = 18;
+                worksheet.Columns[3].ColumnWidth = 18;
+                worksheet.Columns[4].ColumnWidth = 22;
+                worksheet.Columns[5].ColumnWidth = 18;
 
                 // Сохранение
                 string path = System.IO.Path.Combine(
@@ -208,31 +221,33 @@ namespace MyZadacha
                 DateTime startDate = dtpStart.Value.Date;
                 DateTime endDate = dtpEnd.Value.Date;
 
-                // SQL: для каждого сотрудника считаем облагаемую сумму и налог
-                // Логика: отчёт облагается налогом, если у сотрудника есть выдача (cashadvance) 
-                // с датой ПОЗЖЕ даты отчёта
+                // Запрос без cashadvance
+                // Налог считается как 13% от разницы между total_spent и total_paid
+                // (если total_spent > total_paid, то облагается разница)
                 string sql = @"
-                    WITH report_tax AS (
-                        SELECT 
-                            ar.employee_id,
-                            e.name AS employee_name,
-                            ar.total_spent,
-                            EXISTS (
-                                SELECT 1 FROM cashadvance ca 
-                                WHERE ca.employee_id = ar.employee_id 
-                                AND ca.date_issued > ar.report_date
-                            ) AS has_advance_after_report
-                        FROM advancereport ar
-                        JOIN employee e ON e.id = ar.employee_id
-                        WHERE ar.report_date::date BETWEEN :startDate AND :endDate
-                    )
                     SELECT 
-                        employee_name,
-                        SUM(CASE WHEN has_advance_after_report THEN total_spent ELSE 0 END) AS taxable_sum,
-                        SUM(CASE WHEN has_advance_after_report THEN total_spent * 0.13 ELSE 0 END) AS tax_sum
-                    FROM report_tax
-                    GROUP BY employee_name
-                    ORDER BY employee_name";
+                        e.name AS employee_name,
+                        SUM(ar.total_spent) AS total_spent,
+                        SUM(ar.total_paid) AS total_paid,
+                        SUM(
+                            CASE 
+                                WHEN ar.total_spent > ar.total_paid 
+                                THEN ar.total_spent - ar.total_paid 
+                                ELSE 0 
+                            END
+                        ) AS taxable_sum,
+                        SUM(
+                            CASE 
+                                WHEN ar.total_spent > ar.total_paid 
+                                THEN (ar.total_spent - ar.total_paid) * 0.13 
+                                ELSE 0 
+                            END
+                        ) AS tax_sum
+                    FROM advancereport ar
+                    JOIN employee e ON e.id = ar.employee_id
+                    WHERE ar.report_date::date BETWEEN :startDate AND :endDate
+                    GROUP BY e.name
+                    ORDER BY e.name";
 
                 NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
                 cmd.Parameters.AddWithValue("startDate", startDate);
