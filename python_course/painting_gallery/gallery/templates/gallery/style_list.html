@@ -1,0 +1,59 @@
+{% extends 'gallery/base.html' %}
+
+{% block title %}Стили живописи — Галерея живописи{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="page-title mb-0"><i class="bi bi-brush"></i> Художественные стили</h1>
+    <a href="{% url 'style_add' %}" class="btn btn-gold">
+        <i class="bi bi-plus-lg"></i> Добавить стиль
+    </a>
+</div>
+
+{% if styles %}
+    <div class="row row-cols-1 row-cols-md-2 g-4">
+        {% for style in styles %}
+            <div class="col">
+                <div class="card p-3 h-100">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h5 style="color: var(--accent);">{{ style.name }}</h5>
+                            {% if style.period %}
+                                <p class="text-muted small mb-2">
+                                    <i class="bi bi-clock-history"></i> {{ style.period }}
+                                </p>
+                            {% endif %}
+                            {% if style.description %}
+                                <p style="color: #ccc; font-size: 0.9rem;">{{ style.description|truncatewords:30 }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="text-end ms-3">
+                            <div style="color: var(--accent); font-size: 1.5rem; font-weight: bold;">
+                                {{ style.painting_count }}
+                            </div>
+                            <div class="text-muted" style="font-size: 0.75rem;">картин</div>
+                        </div>
+                    </div>
+                    <div class="mt-2 d-flex gap-2">
+                        <a href="{% url 'painting_list' %}?style={{ style.pk }}"
+                           class="btn btn-sm btn-outline-gold flex-grow-1">
+                            <i class="bi bi-images"></i> Картины стиля
+                        </a>
+                        <a href="{% url 'style_edit' style.pk %}" class="btn btn-sm btn-outline-secondary">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="text-center py-5">
+        <div style="font-size: 4rem; color: #333;">🎨</div>
+        <h4 class="text-muted mt-3">Стили не добавлены</h4>
+        <a href="{% url 'style_add' %}" class="btn btn-gold mt-2">
+            <i class="bi bi-plus-lg"></i> Добавить стиль
+        </a>
+    </div>
+{% endif %}
+{% endblock %}

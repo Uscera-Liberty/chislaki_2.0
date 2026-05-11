@@ -1,0 +1,127 @@
+{% extends 'gallery/base.html' %}
+
+{% block title %}{{ action }} — Галерея живописи{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb" style="background: transparent;">
+        <li class="breadcrumb-item">
+            <a href="{% url 'painting_list' %}" style="color: var(--accent)">Картины</a>
+        </li>
+        {% if painting %}
+            <li class="breadcrumb-item">
+                <a href="{% url 'painting_detail' painting.pk %}" style="color: var(--accent)">
+                    {{ painting.title }}
+                </a>
+            </li>
+        {% endif %}
+        <li class="breadcrumb-item active" style="color: #888;">{{ action }}</li>
+    </ol>
+</nav>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card p-4">
+            <h2 class="page-title" style="font-size: 1.5rem;">
+                <i class="bi bi-palette2"></i> {{ action }}
+            </h2>
+
+            <form method="post">
+                {% csrf_token %}
+
+                <div class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">{{ form.title.label }}</label>
+                        {{ form.title }}
+                        {% if form.title.errors %}
+                            <div class="text-danger small">{{ form.title.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.artist.label }}</label>
+                        {{ form.artist }}
+                        {% if form.artist.errors %}
+                            <div class="text-danger small">{{ form.artist.errors }}</div>
+                        {% endif %}
+                        <div class="mt-1">
+                            <a href="{% url 'artist_add' %}" class="small" style="color: var(--accent);">
+                                <i class="bi bi-plus"></i> Добавить нового художника
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.style.label }}</label>
+                        {{ form.style }}
+                        {% if form.style.errors %}
+                            <div class="text-danger small">{{ form.style.errors }}</div>
+                        {% endif %}
+                        <div class="mt-1">
+                            <a href="{% url 'style_add' %}" class="small" style="color: var(--accent);">
+                                <i class="bi bi-plus"></i> Добавить стиль
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.year.label }}</label>
+                        {{ form.year }}
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.technique.label }}</label>
+                        {{ form.technique }}
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.height_cm.label }}</label>
+                        {{ form.height_cm }}
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.width_cm.label }}</label>
+                        {{ form.width_cm }}
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">{{ form.museum.label }}</label>
+                        {{ form.museum }}
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">{{ form.image_url.label }}</label>
+                        {{ form.image_url }}
+                        <div class="form-text" style="color: #888;">
+                            Вставьте прямую ссылку на изображение (URL заканчивается на .jpg, .png и т.д.)
+                        </div>
+                        {% if form.image_url.errors %}
+                            <div class="text-danger small">{{ form.image_url.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label">{{ form.description.label }}</label>
+                        {{ form.description }}
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mt-4">
+                    <button type="submit" class="btn btn-gold">
+                        <i class="bi bi-check-lg"></i> Сохранить
+                    </button>
+                    {% if painting %}
+                        <a href="{% url 'painting_detail' painting.pk %}" class="btn btn-outline-secondary">
+                            Отмена
+                        </a>
+                    {% else %}
+                        <a href="{% url 'painting_list' %}" class="btn btn-outline-secondary">
+                            Отмена
+                        </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

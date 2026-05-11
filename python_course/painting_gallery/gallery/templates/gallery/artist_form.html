@@ -1,0 +1,74 @@
+{% extends 'gallery/base.html' %}
+
+{% block title %}{{ action }} — Галерея живописи{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb" style="background: transparent;">
+        <li class="breadcrumb-item">
+            <a href="{% url 'artist_list' %}" style="color: var(--accent)">Художники</a>
+        </li>
+        {% if artist %}
+            <li class="breadcrumb-item">
+                <a href="{% url 'artist_detail' artist.pk %}" style="color: var(--accent)">{{ artist.full_name }}</a>
+            </li>
+        {% endif %}
+        <li class="breadcrumb-item active" style="color: #888;">{{ action }}</li>
+    </ol>
+</nav>
+
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card p-4">
+            <h2 class="page-title" style="font-size: 1.5rem;">
+                <i class="bi bi-person-circle"></i> {{ action }}
+            </h2>
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.first_name.label }}</label>
+                        {{ form.first_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.last_name.label }}</label>
+                        {{ form.last_name }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.birth_year.label }}</label>
+                        {{ form.birth_year }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.death_year.label }}</label>
+                        {{ form.death_year }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.nationality.label }}</label>
+                        {{ form.nationality }}
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">{{ form.style.label }}</label>
+                        {{ form.style }}
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">{{ form.biography.label }}</label>
+                        {{ form.biography }}
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mt-4">
+                    <button type="submit" class="btn btn-gold">
+                        <i class="bi bi-check-lg"></i> Сохранить
+                    </button>
+                    {% if artist %}
+                        <a href="{% url 'artist_detail' artist.pk %}" class="btn btn-outline-secondary">Отмена</a>
+                    {% else %}
+                        <a href="{% url 'artist_list' %}" class="btn btn-outline-secondary">Отмена</a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

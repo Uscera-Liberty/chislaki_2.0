@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Галерея живописи{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #1a1a2e;
+            --card-bg: #16213e;
+            --accent: #e8b86d;
+            --text-muted-custom: #a0a0b0;
+        }
+        body {
+            background-color: #0f0f1a;
+            color: #e0e0e8;
+            font-family: 'Georgia', serif;
+            min-height: 100vh;
+        }
+        .navbar {
+            background-color: var(--dark-bg) !important;
+            border-bottom: 2px solid var(--accent);
+        }
+        .navbar-brand {
+            color: var(--accent) !important;
+            font-size: 1.4rem;
+            letter-spacing: 1px;
+        }
+        .nav-link {
+            color: #ccc !important;
+            transition: color 0.2s;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: var(--accent) !important;
+        }
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid #2a2a4a;
+            border-radius: 8px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(232, 184, 109, 0.15);
+        }
+        .btn-gold {
+            background-color: var(--accent);
+            color: #1a1a2e;
+            border: none;
+            font-weight: 600;
+        }
+        .btn-gold:hover {
+            background-color: #d4a45a;
+            color: #1a1a2e;
+        }
+        .btn-outline-gold {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .btn-outline-gold:hover {
+            background-color: var(--accent);
+            color: #1a1a2e;
+        }
+        .page-title {
+            color: var(--accent);
+            font-size: 2rem;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #2a2a4a;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .badge-style {
+            background-color: #2d2d5a;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+        }
+        .painting-thumb {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            border-radius: 6px 6px 0 0;
+        }
+        .painting-thumb-placeholder {
+            width: 100%;
+            height: 220px;
+            background: linear-gradient(135deg, #1a1a3e, #2d2d5a);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 4rem;
+            color: var(--accent);
+            border-radius: 6px 6px 0 0;
+        }
+        .form-control, .form-select {
+            background-color: #1a1a3e;
+            border-color: #3a3a6a;
+            color: #e0e0e8;
+        }
+        .form-control:focus, .form-select:focus {
+            background-color: #1a1a3e;
+            border-color: var(--accent);
+            color: #e0e0e8;
+            box-shadow: 0 0 0 0.25rem rgba(232, 184, 109, 0.15);
+        }
+        .form-control::placeholder {
+            color: #666;
+        }
+        .form-label {
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .alert-success {
+            background-color: #1a3a2e;
+            border-color: #2d6a4a;
+            color: #6fcf97;
+        }
+        .detail-label {
+            color: var(--text-muted-custom);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .detail-value {
+            color: #e0e0e8;
+            font-size: 1rem;
+        }
+        footer {
+            background-color: var(--dark-bg);
+            border-top: 1px solid #2a2a4a;
+            color: var(--text-muted-custom);
+            padding: 1.5rem 0;
+            margin-top: 3rem;
+        }
+        .filter-panel {
+            background-color: var(--card-bg);
+            border: 1px solid #2a2a4a;
+            border-radius: 8px;
+            padding: 1.2rem;
+            margin-bottom: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark">
+    <div class="container">
+        <a class="navbar-brand" href="{% url 'painting_list' %}">
+            <i class="bi bi-palette2"></i> Галерея живописи
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item">
+                    <a class="nav-link {% if request.resolver_match.url_name == 'painting_list' %}active{% endif %}"
+                       href="{% url 'painting_list' %}">
+                        <i class="bi bi-images"></i> Картины
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if 'artist' in request.resolver_match.url_name %}active{% endif %}"
+                       href="{% url 'artist_list' %}">
+                        <i class="bi bi-person-circle"></i> Художники
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if 'style' in request.resolver_match.url_name %}active{% endif %}"
+                       href="{% url 'style_list' %}">
+                        <i class="bi bi-brush"></i> Стили
+                    </a>
+                </li>
+            </ul>
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'painting_add' %}">
+                        <i class="bi bi-plus-circle"></i> Добавить картину
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/admin/" target="_blank">
+                        <i class="bi bi-gear"></i> Админ
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<div class="container mt-4">
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    {% block content %}{% endblock %}
+</div>
+
+<footer>
+    <div class="container text-center">
+        <small><i class="bi bi-palette2"></i> Галерея живописи — Лабораторная работа №7, вариант 10</small>
+    </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

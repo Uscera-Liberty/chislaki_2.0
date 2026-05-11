@@ -1,0 +1,100 @@
+{% extends 'gallery/base.html' %}
+
+{% block title %}{{ artist.full_name }} — Галерея живописи{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb" style="background: transparent;">
+        <li class="breadcrumb-item">
+            <a href="{% url 'artist_list' %}" style="color: var(--accent)">Художники</a>
+        </li>
+        <li class="breadcrumb-item active" style="color: #888;">{{ artist.full_name }}</li>
+    </ol>
+</nav>
+
+<div class="row g-4">
+    <div class="col-md-4">
+        <div class="card p-4 text-center">
+            <div style="font-size: 5rem; line-height: 1; margin-bottom: 1rem;">👨‍🎨</div>
+            <h2 style="color: var(--accent); font-size: 1.5rem;">{{ artist.full_name }}</h2>
+            {% if artist.life_years %}
+                <p class="text-muted">{{ artist.life_years }}</p>
+            {% endif %}
+
+            <hr style="border-color: #2a2a4a;">
+
+            <div class="text-start">
+                {% if artist.nationality %}
+                    <div class="mb-2">
+                        <div class="detail-label">Национальность</div>
+                        <div class="detail-value">{{ artist.nationality }}</div>
+                    </div>
+                {% endif %}
+                {% if artist.style %}
+                    <div class="mb-2">
+                        <div class="detail-label">Основной стиль</div>
+                        <div class="detail-value">
+                            <span class="badge badge-style">{{ artist.style.name }}</span>
+                        </div>
+                    </div>
+                {% endif %}
+                <div class="mb-2">
+                    <div class="detail-label">Картин в галерее</div>
+                    <div class="detail-value">{{ paintings.count }}</div>
+                </div>
+            </div>
+
+            <a href="{% url 'artist_edit' artist.pk %}" class="btn btn-gold mt-3 w-100">
+                <i class="bi bi-pencil"></i> Редактировать
+            </a>
+        </div>
+    </div>
+
+    <div class="col-md-8">
+        {% if artist.biography %}
+            <div class="card p-3 mb-4">
+                <h5 style="color: var(--accent);"><i class="bi bi-journal-text"></i> Биография</h5>
+                <p style="color: #ccc; line-height: 1.7;">{{ artist.biography }}</p>
+            </div>
+        {% endif %}
+
+        <h4 style="color: var(--accent); margin-bottom: 1rem;">
+            <i class="bi bi-images"></i> Работы в галерее
+        </h4>
+
+        {% if paintings %}
+            <div class="row row-cols-2 row-cols-md-3 g-3">
+                {% for painting in paintings %}
+                    <div class="col">
+                        <div class="card h-100">
+                            {% if painting.image_url %}
+                                <img src="{{ painting.image_url }}" alt="{{ painting.title }}"
+                                     style="height:130px; object-fit:cover; border-radius:6px 6px 0 0;"
+                                     onerror="this.style.display='none'">
+                            {% else %}
+                                <div style="height:130px; background:#1a1a3e; display:flex; align-items:center;
+                                            justify-content:center; font-size:2rem; border-radius:6px 6px 0 0;">🖼</div>
+                            {% endif %}
+                            <div class="card-body p-2">
+                                <p class="small mb-1" style="color: var(--accent);">{{ painting.title }}</p>
+                                {% if painting.year %}
+                                    <p class="small text-muted mb-1">{{ painting.year }} г.</p>
+                                {% endif %}
+                                <a href="{% url 'painting_detail' painting.pk %}"
+                                   class="btn btn-sm btn-outline-gold w-100">
+                                    Открыть
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="text-muted">Картины этого художника ещё не добавлены.</p>
+            <a href="{% url 'painting_add' %}" class="btn btn-outline-gold btn-sm">
+                <i class="bi bi-plus"></i> Добавить картину
+            </a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
