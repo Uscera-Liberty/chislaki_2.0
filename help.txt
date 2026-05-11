@@ -3,459 +3,122 @@ using System;
 using System.Data;
 using System.Drawing;
 using System.Windows.Forms;
-using Excel = Microsoft.Office.Interop.Excel;
 
 namespace MyZadacha
 {
-    public class ReportExcel : Form
+    public class TaxReportForm : Form
     {
         private NpgsqlConnection con;
-        private int reportId;
-        private Button btnExport;
-        private Button btnCancel;
-        private Label lblInfo;
+        private DateTimePicker dtpStart;
+        private DateTimePicker dtpEnd;
+        private Button btnGenerate;
+        private DataGridView dgvReport;
+        private Button btnExportExcel;
 
-        public ReportExcel(NpgsqlConnection connection, int id)
+        public TaxReportForm(NpgsqlConnection connection)
         {
             con = connection;
-            reportId = id;
             InitializeComponent();
         }
 
         private void InitializeComponent()
         {
-            this.Text = "Экспорт отчёта в Excel";
-            this.Size = new Size(400, 160);
+            this.Text = "Налоговый отчёт за период";
+            this.Size = new Size(800, 500);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.BackColor = Color.White;
 
-            lblInfo = new Label
+            Label lblPeriod = new Label { Text = "Период:", Location = new Point(20, 20), Size = new Size(50, 25) };
+            dtpStart = new DateTimePicker { Location = new Point(80, 20), Size = new Size(120, 25), Format = DateTimePickerFormat.Short };
+            Label lblTo = new Label { Text = "—", Location = new Point(210, 20), Size = new Size(20, 25) };
+            dtpEnd = new DateTimePicker { Location = new Point(240, 20), Size = new Size(120, 25), Format = DateTimePickerFormat.Short };
+            
+            btnGenerate = new Button { Text = "Сформировать", Location = new Point(380, 18), Size = new Size(120, 30), BackColor = Color.LightBlue };
+            btnGenerate.Click += BtnGenerate_Click;
+
+            dgvReport = new DataGridView
             {
-                Text = $"Экспорт авансового отчёта №{reportId}",
-                Location = new Point(20, 25),
-                Size = new Size(350, 30),
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                TextAlign = ContentAlignment.MiddleCenter
+                Location = new Point(20, 60),
+                Size = new Size(750, 350),
+                AllowUserToAddRows = false,
+                ReadOnly = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
             };
 
-            btnExport = new Button
-            {
-                Text = "▶  Выгрузить в Excel",
-                Location = new Point(40, 80),
-                Size = new Size(150, 35),
-                BackColor = Color.FromArgb(68, 114, 196),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnExport.FlatAppearance.BorderSize = 0;
-            btnExport.Click += BtnExport_Click;
+            btnExportExcel = new Button { Text = "Экспорт в Excel", Location = new Point(20, 420), Size = new Size(120, 30), BackColor = Color.LightGreen };
+            btnExportExcel.Click += BtnExportExcel_Click;
 
-            btnCancel = new Button
-            {
-                Text = "Отмена",
-                Location = new Point(210, 80),
-                Size = new Size(130, 35),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9),
-                Cursor = Cursors.Hand
-            };
-            btnCancel.Click += (s, e) => Close();
-
-            Controls.Add(lblInfo);
-            Controls.Add(btnExport);
-            Controls.Add(btnCancel);
+            Controls.Add(lblPeriod);
+            Controls.Add(dtpStart);
+            Controls.Add(lblTo);
+            Controls.Add(dtpEnd);
+            Controls.Add(btnGenerate);
+            Controls.Add(dgvReport);
+            Controls.Add(btnExportExcel);
         }
 
-        private void BtnExport_Click(object sender, EventArgs e) => ExportToExcel();
-
-        private void ExportToExcel()
+        private void BtnGenerate_Click(object sender, EventArgs e)
         {
-            // ── Читаем шапку отчёта ──────────────────────────────────
-            DataRow header = null;
-            DataTable lines = null;
+            LoadReport();
+        }
 
+        private void LoadReport()
+        {
             try
             {
-                string sqlHeader = $@"
-                    SELECT ar.id, e.name AS employee_name, ar.report_date,
-                           ar.period_start, ar.period_end, ar.purpose,
-                           ar.total_spent, ar.total_paid, ar.taxable_sum, ar.tax_sum
-                    FROM advancereport ar
-                    JOIN employee e ON e.id = ar.employee_id
-                    WHERE ar.id = {reportId}";
+                // Запрос: для каждого сотрудника за период суммируем суммы отчётов, где дата отчёта раньше даты выдачи
+                // Упрощённо: считаем налогооблагаемую базу как сумму total_spent по отчётам, у которых report_date < (дата выдачи)
+                // Но правильнее: для каждого отчёта проверить наличие выдачи позже. Здесь делаем агрегат по сотрудникам.
+                string sql = @"
+                    WITH report_tax AS (
+                        SELECT 
+                            ar.employee_id,
+                            e.name AS employee_name,
+                            ar.total_spent,
+                            EXISTS (
+                                SELECT 1 FROM cashadvance ca 
+                                WHERE ca.employee_id = ar.employee_id 
+                                AND ca.date_issued > ar.report_date
+                            ) AS has_advance_after_report
+                        FROM advancereport ar
+                        JOIN employee e ON e.id = ar.employee_id
+                        WHERE ar.report_date::date BETWEEN :startDate AND :endDate
+                    )
+                    SELECT 
+                        employee_name,
+                        SUM(CASE WHEN has_advance_after_report THEN total_spent ELSE 0 END) AS taxable_sum,
+                        SUM(CASE WHEN has_advance_after_report THEN total_spent * 0.13 ELSE 0 END) AS tax_sum
+                    FROM report_tax
+                    GROUP BY employee_name
+                    ORDER BY employee_name";
 
-                NpgsqlDataAdapter daH = new NpgsqlDataAdapter(sqlHeader, con);
-                DataSet dsH = new DataSet();
-                daH.Fill(dsH);
+                NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+                cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
+                cmd.Parameters.AddWithValue("endDate", dtpEnd.Value.Date);
+                NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
+                DataTable dt = new DataTable();
+                da.Fill(dt);
 
-                if (dsH.Tables[0].Rows.Count == 0)
-                {
-                    MessageBox.Show("Отчёт не найден!", "Ошибка",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-                header = dsH.Tables[0].Rows[0];
-
-                string sqlLines = $@"
-                    SELECT ci.name AS cost_item_name, ci.metrics,
-                           arl.quantity, ci.price,
-                           ROUND(arl.quantity * ci.price, 2) AS line_total
-                    FROM advancereportline arl
-                    JOIN costitem ci ON ci.id = arl.cost_item_id
-                    WHERE arl.report_id = {reportId}
-                    ORDER BY ci.name";
-
-                NpgsqlDataAdapter daL = new NpgsqlDataAdapter(sqlLines, con);
-                DataSet dsL = new DataSet();
-                daL.Fill(dsL);
-                lines = dsL.Tables[0];
+                dgvReport.DataSource = dt;
+                dgvReport.Columns["employee_name"].HeaderText = "Сотрудник";
+                dgvReport.Columns["taxable_sum"].HeaderText = "Облагаемая сумма";
+                dgvReport.Columns["tax_sum"].HeaderText = "Сумма налога (13%)";
+                dgvReport.Columns["taxable_sum"].DefaultCellStyle.Format = "N2";
+                dgvReport.Columns["tax_sum"].DefaultCellStyle.Format = "N2";
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ошибка чтения данных:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
+                MessageBox.Show("Ошибка загрузки отчёта: " + ex.Message);
             }
+        }
 
-            Excel.Application excelApp = null;
-            Excel.Workbook workbook = null;
-            Excel.Worksheet wsReport = null;
-            Excel.Worksheet wsTax = null;
-
-            try
-            {
-                excelApp = new Excel.Application();
-                excelApp.DisplayAlerts = false;
-                workbook = excelApp.Workbooks.Add();
-
-                // ══════════════════════════════════════════════════════
-                // ЛИСТ 1: Авансовый отчёт (строки расходов)
-                // ══════════════════════════════════════════════════════
-                wsReport = (Excel.Worksheet)workbook.Worksheets[1];
-                wsReport.Name = "Авансовый отчёт";
-
-                // Заголовок документа
-                wsReport.Cells[1, 1] = $"АВАНСОВЫЙ ОТЧЁТ № {reportId}";
-                Excel.Range title = wsReport.Range[wsReport.Cells[1, 1], wsReport.Cells[1, 6]];
-                title.Merge();
-                title.Font.Bold = true;
-                title.Font.Size = 14;
-                title.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                title.Font.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-
-                // Шапка
-                void WriteInfo(int r, string label, string value)
-                {
-                    wsReport.Cells[r, 1] = label;
-                    ((Excel.Range)wsReport.Cells[r, 1]).Font.Bold = true;
-                    ((Excel.Range)wsReport.Cells[r, 1]).Font.Color =
-                        ColorTranslator.ToOle(Color.FromArgb(89, 89, 89));
-                    wsReport.Cells[r, 2] = value;
-                    Excel.Range vCell = wsReport.Range[wsReport.Cells[r, 2], wsReport.Cells[r, 6]];
-                    vCell.Merge();
-                }
-
-                WriteInfo(3, "Сотрудник:", header["employee_name"].ToString());
-                WriteInfo(4, "Дата отчёта:", Convert.ToDateTime(header["report_date"]).ToString("dd.MM.yyyy"));
-                WriteInfo(5, "Период:",
-                    Convert.ToDateTime(header["period_start"]).ToString("dd.MM.yyyy") +
-                    " – " +
-                    Convert.ToDateTime(header["period_end"]).ToString("dd.MM.yyyy"));
-                WriteInfo(6, "Цель:", header["purpose"].ToString());
-
-                // Разделитель
-                Excel.Range sep = wsReport.Range[wsReport.Cells[7, 1], wsReport.Cells[7, 6]];
-                sep.Borders[Excel.XlBordersIndex.xlEdgeBottom].LineStyle = Excel.XlLineStyle.xlContinuous;
-                sep.Borders[Excel.XlBordersIndex.xlEdgeBottom].Weight = Excel.XlBorderWeight.xlMedium;
-                sep.Borders[Excel.XlBordersIndex.xlEdgeBottom].Color =
-                    ColorTranslator.ToOle(Color.FromArgb(68, 114, 196));
-
-                // Заголовки таблицы
-                int hRow = 8;
-                string[] cols = { "№", "Статья затрат", "Ед.изм", "Кол-во", "Цена", "Сумма" };
-                for (int i = 0; i < cols.Length; i++)
-                {
-                    Excel.Range cell = wsReport.Cells[hRow, i + 1];
-                    cell.Value2 = cols[i];
-                    cell.Font.Bold = true;
-                    cell.Font.Color = ColorTranslator.ToOle(Color.White);
-                    cell.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(68, 114, 196));
-                    cell.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                    cell.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    cell.Borders.Weight = Excel.XlBorderWeight.xlThin;
-                }
-
-                // Строки данных
-                int row = hRow + 1;
-                int num = 1;
-                foreach (DataRow line in lines.Rows)
-                {
-                    bool isEven = (num % 2 == 0);
-                    Color rowColor = isEven
-                        ? Color.FromArgb(235, 241, 251)
-                        : Color.White;
-
-                    Excel.Range rowRange = wsReport.Range[wsReport.Cells[row, 1], wsReport.Cells[row, 6]];
-                    rowRange.Interior.Color = ColorTranslator.ToOle(rowColor);
-                    rowRange.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    rowRange.Borders.Color = ColorTranslator.ToOle(Color.FromArgb(189, 215, 238));
-                    rowRange.Borders.Weight = Excel.XlBorderWeight.xlThin;
-
-                    wsReport.Cells[row, 1] = num++;
-                    wsReport.Cells[row, 2] = line["cost_item_name"].ToString();
-                    wsReport.Cells[row, 3] = line["metrics"].ToString();
-                    wsReport.Cells[row, 4] = Convert.ToDecimal(line["quantity"]);
-                    wsReport.Cells[row, 5] = Convert.ToDecimal(line["price"]);
-                    ((Excel.Range)wsReport.Cells[row, 5]).NumberFormat = "#,##0.00";
-                    wsReport.Cells[row, 6] = Convert.ToDecimal(line["line_total"]);
-                    ((Excel.Range)wsReport.Cells[row, 6]).NumberFormat = "#,##0.00";
-
-                    ((Excel.Range)wsReport.Cells[row, 1]).HorizontalAlignment =
-                        Excel.XlHAlign.xlHAlignCenter;
-                    ((Excel.Range)wsReport.Cells[row, 4]).HorizontalAlignment =
-                        Excel.XlHAlign.xlHAlignCenter;
-                    row++;
-                }
-
-                // Итоговые строки
-                int tRow = row + 1;
-
-                void TotalLine(int r, string label, decimal val, bool highlight)
-                {
-                    Excel.Range lbl = wsReport.Range[wsReport.Cells[r, 4], wsReport.Cells[r, 5]];
-                    lbl.Merge();
-                    lbl.Value2 = label;
-                    lbl.Font.Bold = true;
-                    lbl.HorizontalAlignment = Excel.XlHAlign.xlHAlignRight;
-
-                    Excel.Range valCell = wsReport.Cells[r, 6];
-                    valCell.Value2 = val;
-                    valCell.Font.Bold = true;
-                    valCell.NumberFormat = "#,##0.00";
-
-                    if (highlight)
-                    {
-                        Color yel = Color.FromArgb(255, 230, 153);
-                        lbl.Interior.Color = ColorTranslator.ToOle(yel);
-                        valCell.Interior.Color = ColorTranslator.ToOle(yel);
-                    }
-
-                    Excel.Range border = wsReport.Range[wsReport.Cells[r, 4], wsReport.Cells[r, 6]];
-                    border.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    border.Borders.Weight = Excel.XlBorderWeight.xlThin;
-                }
-
-                TotalLine(tRow,     "Итого расходов:",     Convert.ToDecimal(header["total_spent"]),   false);
-                TotalLine(tRow + 1, "Выплачено из кассы:", Convert.ToDecimal(header["total_paid"]),    false);
-                TotalLine(tRow + 2, "Облагаемая сумма:",   Convert.ToDecimal(header["taxable_sum"]),   true);
-                TotalLine(tRow + 3, "Налог (13%):",        Convert.ToDecimal(header["tax_sum"]),       true);
-
-                // Ширина колонок
-                wsReport.Columns[1].ColumnWidth = 5;
-                wsReport.Columns[2].ColumnWidth = 32;
-                wsReport.Columns[3].ColumnWidth = 10;
-                wsReport.Columns[4].ColumnWidth = 10;
-                wsReport.Columns[5].ColumnWidth = 15;
-                wsReport.Columns[6].ColumnWidth = 15;
-
-                // ══════════════════════════════════════════════════════
-                // ЛИСТ 2: Отчёт по налогам за период (по заданию!)
-                // Сформировать отчёт по работникам с указанием сумм
-                // облагаемых налогом и сумм налога
-                // ══════════════════════════════════════════════════════
-                wsTax = (Excel.Worksheet)workbook.Worksheets.Add(
-                    Type.Missing, wsReport);
-                wsTax.Name = "Отчёт по налогам";
-
-                // Определяем период из текущего отчёта
-                DateTime ps = Convert.ToDateTime(header["period_start"]);
-                DateTime pe = Convert.ToDateTime(header["period_end"]);
-
-                // Читаем ВСЕ отчёты за тот же период
-                string sqlTax = $@"
-                    SELECT
-                        e.name                  AS employee_name,
-                        COUNT(ar.id)            AS report_count,
-                        SUM(ar.total_spent)     AS total_spent,
-                        SUM(ar.total_paid)      AS total_paid,
-                        SUM(ar.taxable_sum)     AS taxable_sum,
-                        SUM(ar.tax_sum)         AS tax_sum
-                    FROM advancereport ar
-                    JOIN employee e ON e.id = ar.employee_id
-                    WHERE ar.report_date BETWEEN '{ps:yyyy-MM-dd}' AND '{pe:yyyy-MM-dd}'
-                    GROUP BY e.id, e.name
-                    ORDER BY e.name";
-
-                NpgsqlDataAdapter daTax = new NpgsqlDataAdapter(sqlTax, con);
-                DataSet dsTax = new DataSet();
-                daTax.Fill(dsTax);
-                DataTable dtTax = dsTax.Tables[0];
-
-                // Заголовок листа
-                wsTax.Cells[1, 1] = "ОТЧЁТ ПО РАБОТНИКАМ — ОБЛАГАЕМЫЕ СУММЫ И НАЛОГ";
-                Excel.Range taxTitle = wsTax.Range[wsTax.Cells[1, 1], wsTax.Cells[1, 6]];
-                taxTitle.Merge();
-                taxTitle.Font.Bold = true;
-                taxTitle.Font.Size = 13;
-                taxTitle.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                taxTitle.Font.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-
-                wsTax.Cells[2, 1] = $"Период: {ps:dd.MM.yyyy} – {pe:dd.MM.yyyy}";
-                Excel.Range periodCell = wsTax.Range[wsTax.Cells[2, 1], wsTax.Cells[2, 6]];
-                periodCell.Merge();
-                periodCell.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                periodCell.Font.Italic = true;
-                periodCell.Font.Color = ColorTranslator.ToOle(Color.FromArgb(89, 89, 89));
-
-                // Заголовки таблицы
-                string[] taxCols = {
-                    "Сотрудник", "Кол-во отчётов", "Итого расходов",
-                    "Выплачено", "Облагаемая сумма", "Налог (13%)"
-                };
-                for (int i = 0; i < taxCols.Length; i++)
-                {
-                    Excel.Range c = wsTax.Cells[4, i + 1];
-                    c.Value2 = taxCols[i];
-                    c.Font.Bold = true;
-                    c.Font.Color = ColorTranslator.ToOle(Color.White);
-                    c.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(68, 114, 196));
-                    c.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                    c.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    c.Borders.Weight = Excel.XlBorderWeight.xlThin;
-                    c.WrapText = true;
-                }
-
-                // Данные
-                int tRow2 = 5;
-                decimal sumSpent = 0, sumPaid = 0, sumTaxable = 0, sumTax = 0;
-
-                foreach (DataRow tr in dtTax.Rows)
-                {
-                    bool even2 = (tRow2 % 2 == 0);
-                    Excel.Range rng2 = wsTax.Range[wsTax.Cells[tRow2, 1], wsTax.Cells[tRow2, 6]];
-                    rng2.Interior.Color = even2
-                        ? ColorTranslator.ToOle(Color.FromArgb(235, 241, 251))
-                        : ColorTranslator.ToOle(Color.White);
-                    rng2.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    rng2.Borders.Color = ColorTranslator.ToOle(Color.FromArgb(189, 215, 238));
-                    rng2.Borders.Weight = Excel.XlBorderWeight.xlThin;
-
-                    decimal spent    = Convert.ToDecimal(tr["total_spent"]);
-                    decimal paid     = Convert.ToDecimal(tr["total_paid"]);
-                    decimal taxable  = Convert.ToDecimal(tr["taxable_sum"]);
-                    decimal tax      = Convert.ToDecimal(tr["tax_sum"]);
-
-                    wsTax.Cells[tRow2, 1] = tr["employee_name"].ToString();
-                    wsTax.Cells[tRow2, 2] = Convert.ToInt32(tr["report_count"]);
-                    wsTax.Cells[tRow2, 3] = spent;
-                    wsTax.Cells[tRow2, 4] = paid;
-                    wsTax.Cells[tRow2, 5] = taxable;
-                    wsTax.Cells[tRow2, 6] = tax;
-
-                    // Форматирование чисел
-                    for (int c2 = 3; c2 <= 6; c2++)
-                        ((Excel.Range)wsTax.Cells[tRow2, c2]).NumberFormat = "#,##0.00";
-
-                    // Выделяем строки где есть налог
-                    if (taxable > 0)
-                    {
-                        ((Excel.Range)wsTax.Cells[tRow2, 5]).Interior.Color =
-                            ColorTranslator.ToOle(Color.FromArgb(255, 230, 153));
-                        ((Excel.Range)wsTax.Cells[tRow2, 6]).Interior.Color =
-                            ColorTranslator.ToOle(Color.FromArgb(255, 199, 206));
-                    }
-
-                    sumSpent   += spent;
-                    sumPaid    += paid;
-                    sumTaxable += taxable;
-                    sumTax     += tax;
-                    tRow2++;
-                }
-
-                // Итоговая строка
-                tRow2++;
-                Excel.Range totalRow = wsTax.Range[wsTax.Cells[tRow2, 1], wsTax.Cells[tRow2, 6]];
-                totalRow.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-                totalRow.Font.Color     = ColorTranslator.ToOle(Color.White);
-                totalRow.Font.Bold      = true;
-                totalRow.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                totalRow.Borders.Weight    = Excel.XlBorderWeight.xlMedium;
-
-                wsTax.Cells[tRow2, 1] = "ИТОГО";
-                wsTax.Cells[tRow2, 2] = "";
-                wsTax.Cells[tRow2, 3] = sumSpent;
-                wsTax.Cells[tRow2, 4] = sumPaid;
-                wsTax.Cells[tRow2, 5] = sumTaxable;
-                wsTax.Cells[tRow2, 6] = sumTax;
-                for (int c2 = 3; c2 <= 6; c2++)
-                    ((Excel.Range)wsTax.Cells[tRow2, c2]).NumberFormat = "#,##0.00";
-
-                // Ширина колонок листа налогов
-                wsTax.Columns[1].ColumnWidth = 28;
-                wsTax.Columns[2].ColumnWidth = 15;
-                wsTax.Columns[3].ColumnWidth = 16;
-                wsTax.Columns[4].ColumnWidth = 16;
-                wsTax.Columns[5].ColumnWidth = 18;
-                wsTax.Columns[6].ColumnWidth = 14;
-                ((Excel.Range)wsTax.Rows[4]).RowHeight = 35;
-
-                // Активируем первый лист
-                wsReport.Activate();
-
-                // Сохранить и открыть
-                string path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    $"Report_{reportId}_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
-
-                workbook.SaveAs(path);
-                MessageBox.Show($"Файл сохранён:\n{path}", "Готово",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo
-                    { FileName = path, UseShellExecute = true });
-                Close();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка Excel:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                if (workbook  != null) { workbook.Close(false);  System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook); }
-                if (excelApp  != null) { excelApp.Quit();        System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp); }
-                if (wsReport  != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsReport);
-                if (wsTax     != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsTax);
-            }
+        private void BtnExportExcel_Click(object sender, EventArgs e)
+        {
+            // Экспорт в Excel (можно использовать старый метод или EPPlus)
+            if (dgvReport.Rows.Count == 0) return;
+            // Ваш код экспорта (например, из ReportExcel, адаптированный)
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -465,7 +128,7 @@ using System.Data;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using Excel = Microsoft.Office.Interop.Excel;
+using System.Windows.Forms.DataVisualization.Charting;
 
 namespace MyZadacha
 {
@@ -476,184 +139,98 @@ namespace MyZadacha
         private DateTimePicker dtpEnd;
         private CheckedListBox clbCostItems;
         private Button btnBuild;
-        private Button btnCancel;
-        private Button btnSelectAll;
-        private Button btnClearAll;
+        private Chart chart;
+        private DataGridView dgvDetail;
 
         public PieChartForm(NpgsqlConnection connection)
         {
             con = connection;
-            BuildUI();
+            InitializeComponent();
             LoadCostItems();
         }
 
-        private void BuildUI()
+        private void InitializeComponent()
         {
-            this.Text = "Круговая диаграмма по сотрудникам";
-            this.Size = new Size(520, 520);
+            this.Text = "Круговая диаграмма расходов по сотрудникам (выбранные статьи)";
+            this.Size = new Size(900, 700);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-            this.BackColor = Color.White;
-
-            // Заголовок
-            Label lblTitle = new Label
-            {
-                Text = "Круговая диаграмма расходов по сотрудникам",
-                Location = new Point(15, 15),
-                Size = new Size(475, 25),
-                Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                ForeColor = Color.FromArgb(31, 73, 125)
-            };
 
             // Период
-            Panel pnlPeriod = new Panel
-            {
-                Location = new Point(15, 50),
-                Size = new Size(475, 55),
-                BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(235, 241, 251)
-            };
-            Label lblPeriodTitle = new Label
-            {
-                Text = "Период:",
-                Location = new Point(8, 6),
-                Size = new Size(60, 20),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold)
-            };
-            Label lblFrom = new Label { Text = "с", Location = new Point(8, 28), Size = new Size(15, 20) };
-            dtpStart = new DateTimePicker
-            {
-                Location = new Point(25, 25),
-                Size = new Size(130, 25),
-                Format = DateTimePickerFormat.Short,
-                Value = DateTime.Today.AddMonths(-1)
-            };
-            Label lblTo = new Label { Text = "по", Location = new Point(165, 28), Size = new Size(20, 20) };
-            dtpEnd = new DateTimePicker
-            {
-                Location = new Point(188, 25),
-                Size = new Size(130, 25),
-                Format = DateTimePickerFormat.Short,
-                Value = DateTime.Today
-            };
-            pnlPeriod.Controls.AddRange(new Control[]
-                { lblPeriodTitle, lblFrom, dtpStart, lblTo, dtpEnd });
+            Label lblPeriod = new Label { Text = "Период:", Location = new Point(20, 20), Size = new Size(50, 25) };
+            dtpStart = new DateTimePicker { Location = new Point(80, 20), Size = new Size(120, 25), Format = DateTimePickerFormat.Short };
+            Label lblTo = new Label { Text = "—", Location = new Point(210, 20), Size = new Size(20, 25) };
+            dtpEnd = new DateTimePicker { Location = new Point(240, 20), Size = new Size(120, 25), Format = DateTimePickerFormat.Short };
 
             // Статьи затрат
-            Label lblItems = new Label
-            {
-                Text = "Статьи затрат (выберите для диаграммы):",
-                Location = new Point(15, 118),
-                Size = new Size(400, 22),
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                ForeColor = Color.FromArgb(31, 73, 125)
-            };
-
-            // Кнопки выбора всех/снять
-            btnSelectAll = new Button
-            {
-                Text = "Выбрать все",
-                Location = new Point(15, 143),
-                Size = new Size(100, 25),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Cursor = Cursors.Hand,
-                BackColor = Color.FromArgb(235, 241, 251)
-            };
-            btnSelectAll.FlatAppearance.BorderColor = Color.FromArgb(68, 114, 196);
-            btnSelectAll.Click += (s, e) =>
-            {
-                for (int i = 0; i < clbCostItems.Items.Count; i++)
-                    clbCostItems.SetItemChecked(i, true);
-            };
-
-            btnClearAll = new Button
-            {
-                Text = "Снять все",
-                Location = new Point(125, 143),
-                Size = new Size(90, 25),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 8),
-                Cursor = Cursors.Hand,
-                BackColor = Color.FromArgb(255, 235, 235)
-            };
-            btnClearAll.FlatAppearance.BorderColor = Color.Gray;
-            btnClearAll.Click += (s, e) =>
-            {
-                for (int i = 0; i < clbCostItems.Items.Count; i++)
-                    clbCostItems.SetItemChecked(i, false);
-            };
-
+            Label lblItems = new Label { Text = "Статьи затрат:", Location = new Point(20, 60), Size = new Size(100, 25) };
             clbCostItems = new CheckedListBox
             {
-                Location = new Point(15, 175),
-                Size = new Size(475, 250),
-                CheckOnClick = true,
-                Font = new Font("Segoe UI", 9),
-                BorderStyle = BorderStyle.FixedSingle
+                Location = new Point(20, 90),
+                Size = new Size(250, 200),
+                CheckOnClick = true
             };
 
-            // Кнопки действий
+            // Кнопка
             btnBuild = new Button
             {
-                Text = "📊  Построить диаграмму",
-                Location = new Point(15, 440),
-                Size = new Size(200, 38),
-                BackColor = Color.FromArgb(68, 114, 196),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Text = "Построить диаграмму",
+                Location = new Point(20, 310),
+                Size = new Size(150, 30),
+                BackColor = Color.LightGreen
             };
-            btnBuild.FlatAppearance.BorderSize = 0;
             btnBuild.Click += BtnBuild_Click;
 
-            btnCancel = new Button
+            // Диаграмма
+            chart = new Chart
             {
-                Text = "Отмена",
-                Location = new Point(230, 440),
-                Size = new Size(120, 38),
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10),
-                Cursor = Cursors.Hand
+                Location = new Point(300, 20),
+                Size = new Size(550, 400),
+                BackColor = Color.White
             };
-            btnCancel.FlatAppearance.BorderColor = Color.Gray;
-            btnCancel.Click += (s, e) => Close();
+            ChartArea chartArea = new ChartArea("MainArea");
+            chart.ChartAreas.Add(chartArea);
+            chart.Titles.Add("Расходы по сотрудникам");
 
-            Controls.AddRange(new Control[]
+            // Детализация (DataGridView)
+            dgvDetail = new DataGridView
             {
-                lblTitle, pnlPeriod, lblItems,
-                btnSelectAll, btnClearAll,
-                clbCostItems, btnBuild, btnCancel
-            });
+                Location = new Point(20, 360),
+                Size = new Size(830, 280),
+                AllowUserToAddRows = false,
+                ReadOnly = true,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            };
+
+            Controls.Add(lblPeriod);
+            Controls.Add(dtpStart);
+            Controls.Add(lblTo);
+            Controls.Add(dtpEnd);
+            Controls.Add(lblItems);
+            Controls.Add(clbCostItems);
+            Controls.Add(btnBuild);
+            Controls.Add(chart);
+            Controls.Add(dgvDetail);
         }
 
         private void LoadCostItems()
         {
             try
             {
-                string sql = "SELECT id, name FROM costitem WHERE is_active = TRUE ORDER BY name";
+                string sql = "SELECT id, name FROM costitem ORDER BY name";
                 NpgsqlDataAdapter da = new NpgsqlDataAdapter(sql, con);
                 DataTable dt = new DataTable();
                 da.Fill(dt);
-
                 foreach (DataRow row in dt.Rows)
                 {
-                    clbCostItems.Items.Add(new CostItemRow
-                    {
-                        Id   = Convert.ToInt32(row["id"]),
-                        Name = row["name"].ToString()
-                    });
+                    clbCostItems.Items.Add(new { Id = row["id"], Name = row["name"].ToString() });
                 }
-                // По умолчанию все выбраны
+                // По умолчанию выбрать все
                 for (int i = 0; i < clbCostItems.Items.Count; i++)
                     clbCostItems.SetItemChecked(i, true);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ошибка загрузки статей:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Ошибка загрузки статей: " + ex.Message);
             }
         }
 
@@ -661,300 +238,99 @@ namespace MyZadacha
         {
             if (clbCostItems.CheckedItems.Count == 0)
             {
-                MessageBox.Show("Выберите хотя бы одну статью затрат!",
-                    "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Выберите хотя бы одну статью затрат.");
                 return;
             }
-            if (dtpEnd.Value.Date < dtpStart.Value.Date)
-            {
-                MessageBox.Show("Дата окончания не может быть раньше даты начала!",
-                    "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            ExportPieChartToExcel();
+            BuildPieChart();
         }
 
-        private void ExportPieChartToExcel()
+        private void BuildPieChart()
         {
-            DataTable dt = GetDataFromDb();
+            DataTable dt = GetData();
             if (dt == null || dt.Rows.Count == 0)
             {
-                MessageBox.Show("Нет данных за выбранный период по выбранным статьям.",
-                    "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Нет данных за выбранный период.");
                 return;
             }
 
-            // Агрегация по СОТРУДНИКАМ для диаграммы (каждый сектор = сотрудник)
-            var byEmployee = dt.AsEnumerable()
+            // Агрегация по сотрудникам
+            var empData = dt.AsEnumerable()
                 .GroupBy(r => r["employee_name"].ToString())
-                .Select(g => new
-                {
-                    Name  = g.Key,
-                    Total = g.Sum(r => Convert.ToDecimal(r["total_amount"]))
-                })
+                .Select(g => new { Employee = g.Key, Total = g.Sum(r => Convert.ToDecimal(r["total_amount"])) })
                 .OrderByDescending(x => x.Total)
                 .ToList();
 
-            Excel.Application excelApp = null;
-            Excel.Workbook workbook    = null;
-            Excel.Worksheet wsChart   = null;
-            Excel.Worksheet wsDetail  = null;
-
-            try
+            // Очистка диаграммы
+            chart.Series.Clear();
+            Series series = new Series("Сумма")
             {
-                excelApp = new Excel.Application();
-                excelApp.DisplayAlerts = false;
-                workbook = excelApp.Workbooks.Add();
+                ChartType = SeriesChartType.Pie,
+                IsValueShownAsLabel = true,
+                LabelFormat = "#,##0.00",
+                LegendText = "#VALX",
+                ToolTip = "#VALX: #VALY руб."
+            };
+            chart.Series.Add(series);
 
-                // ══════════════════════════════════════════════════════
-                // ЛИСТ 1: Диаграмма — по сотрудникам с суммами
-                // ══════════════════════════════════════════════════════
-                wsChart = (Excel.Worksheet)workbook.Worksheets[1];
-                wsChart.Name = "Диаграмма";
-
-                string period = $"{dtpStart.Value:dd.MM.yyyy} – {dtpEnd.Value:dd.MM.yyyy}";
-
-                // Заголовок
-                wsChart.Cells[1, 1] = $"РАСХОДЫ ПО СОТРУДНИКАМ ЗА ПЕРИОД {period}";
-                Excel.Range t1 = wsChart.Range[wsChart.Cells[1, 1], wsChart.Cells[1, 3]];
-                t1.Merge();
-                t1.Font.Bold = true;
-                t1.Font.Size = 12;
-                t1.Font.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-                t1.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-
-                // Получаем выбранные статьи для подписи
-                string selectedNames = string.Join(", ",
-                    clbCostItems.CheckedItems.Cast<CostItemRow>().Select(x => x.Name));
-                wsChart.Cells[2, 1] = "Статьи: " + selectedNames;
-                Excel.Range t2 = wsChart.Range[wsChart.Cells[2, 1], wsChart.Cells[2, 3]];
-                t2.Merge();
-                t2.Font.Italic = true;
-                t2.Font.Size = 8;
-                t2.Font.Color = ColorTranslator.ToOle(Color.Gray);
-
-                // Данные для диаграммы
-                wsChart.Cells[4, 1] = "Сотрудник";
-                wsChart.Cells[4, 2] = "Сумма расходов";
-                Excel.Range hdr = wsChart.Range[wsChart.Cells[4, 1], wsChart.Cells[4, 2]];
-                hdr.Font.Bold = true;
-                hdr.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(68, 114, 196));
-                hdr.Font.Color = ColorTranslator.ToOle(Color.White);
-                hdr.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-
-                int dataRow = 5;
-                foreach (var emp in byEmployee)
-                {
-                    wsChart.Cells[dataRow, 1] = emp.Name;
-                    wsChart.Cells[dataRow, 2] = emp.Total;
-                    ((Excel.Range)wsChart.Cells[dataRow, 2]).NumberFormat = "#,##0.00";
-
-                    Excel.Range rr = wsChart.Range[wsChart.Cells[dataRow, 1], wsChart.Cells[dataRow, 2]];
-                    rr.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    rr.Borders.Color = ColorTranslator.ToOle(Color.FromArgb(189, 215, 238));
-                    rr.Borders.Weight = Excel.XlBorderWeight.xlThin;
-                    dataRow++;
-                }
-                int lastDataRow = dataRow - 1;
-
-                wsChart.Columns[1].ColumnWidth = 28;
-                wsChart.Columns[2].ColumnWidth = 18;
-
-                // Создание круговой диаграммы
-                Excel.ChartObjects cos = (Excel.ChartObjects)wsChart.ChartObjects();
-                Excel.ChartObject chartObj = cos.Add(250, 60, 420, 340);
-                Excel.Chart chart = chartObj.Chart;
-                chart.ChartType = Excel.XlChartType.xlPie;
-
-                // Диапазон данных
-                Excel.Range dataValues = wsChart.Range[
-                    wsChart.Cells[5, 2], wsChart.Cells[lastDataRow, 2]];
-                Excel.Range dataLabels = wsChart.Range[
-                    wsChart.Cells[5, 1], wsChart.Cells[lastDataRow, 1]];
-
-                chart.SetSourceData(dataValues);
-                ((Excel.Series)chart.SeriesCollection(1)).XValues = dataLabels;
-
-                chart.HasTitle = true;
-                chart.ChartTitle.Text =
-                    $"Расходы по сотрудникам\n{period}";
-                chart.ChartTitle.Font.Size = 11;
-                chart.ChartTitle.Font.Bold = true;
-
-                // Подписи: ИМЕНА + СУММЫ (по заданию "с указанием сумм")
-                Excel.Series series = (Excel.Series)chart.SeriesCollection(1);
-                series.HasDataLabels = true;
-                Excel.DataLabels dl = (Excel.DataLabels)series.DataLabels();
-                dl.ShowCategoryName = true;  // имя сотрудника
-                dl.ShowValue        = true;  // сумма
-                dl.ShowPercentage   = true;  // процент
-                dl.ShowSeriesName   = false;
-                dl.Separator        = "\n";
-                dl.Font.Size        = 8;
-
-                chart.HasLegend = true;
-                chart.Legend.Position = Excel.XlLegendPosition.xlLegendPositionBottom;
-
-                // ══════════════════════════════════════════════════════
-                // ЛИСТ 2: Детализация — статья → сотрудник → сумма
-                // (по заданию: по выбранным статьям затрат,
-                //  сотрудники которые отчитывались по этим статьям)
-                // ══════════════════════════════════════════════════════
-                wsDetail = (Excel.Worksheet)workbook.Worksheets.Add(
-                    Type.Missing, wsChart);
-                wsDetail.Name = "Детализация по статьям";
-
-                wsDetail.Cells[1, 1] =
-                    $"ДЕТАЛИЗАЦИЯ РАСХОДОВ ПО СТАТЬЯМ ЗАТРАТ ЗА ПЕРИОД {period}";
-                Excel.Range dt2 = wsDetail.Range[wsDetail.Cells[1, 1], wsDetail.Cells[1, 4]];
-                dt2.Merge();
-                dt2.Font.Bold = true;
-                dt2.Font.Size = 12;
-                dt2.Font.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-                dt2.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-
-                string[] dCols = { "Статья затрат", "Сотрудник", "Сумма", "%" };
-                for (int i = 0; i < dCols.Length; i++)
-                {
-                    Excel.Range c = wsDetail.Cells[3, i + 1];
-                    c.Value2 = dCols[i];
-                    c.Font.Bold = true;
-                    c.Font.Color = ColorTranslator.ToOle(Color.White);
-                    c.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(68, 114, 196));
-                    c.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                    c.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    c.Borders.Weight = Excel.XlBorderWeight.xlThin;
-                }
-
-                decimal grandTotal = dt.AsEnumerable()
-                    .Sum(r => Convert.ToDecimal(r["total_amount"]));
-
-                int dRow = 4;
-                string lastItem = "";
-                foreach (DataRow dr in dt.Rows)
-                {
-                    string itemName = dr["cost_item_name"].ToString();
-                    bool even3 = (dRow % 2 == 0);
-
-                    Excel.Range rr3 = wsDetail.Range[wsDetail.Cells[dRow, 1], wsDetail.Cells[dRow, 4]];
-                    rr3.Interior.Color = even3
-                        ? ColorTranslator.ToOle(Color.FromArgb(235, 241, 251))
-                        : ColorTranslator.ToOle(Color.White);
-                    rr3.Borders.LineStyle = Excel.XlLineStyle.xlContinuous;
-                    rr3.Borders.Color = ColorTranslator.ToOle(Color.FromArgb(189, 215, 238));
-                    rr3.Borders.Weight = Excel.XlBorderWeight.xlThin;
-
-                    // Название статьи только при смене — группировка
-                    wsDetail.Cells[dRow, 1] = (itemName != lastItem) ? itemName : "";
-                    if (itemName != lastItem)
-                        ((Excel.Range)wsDetail.Cells[dRow, 1]).Font.Bold = true;
-
-                    wsDetail.Cells[dRow, 2] = dr["employee_name"].ToString();
-
-                    decimal amt = Convert.ToDecimal(dr["total_amount"]);
-                    wsDetail.Cells[dRow, 3] = amt;
-                    ((Excel.Range)wsDetail.Cells[dRow, 3]).NumberFormat = "#,##0.00";
-
-                    decimal pct = grandTotal > 0 ? Math.Round(amt / grandTotal * 100, 1) : 0;
-                    wsDetail.Cells[dRow, 4] = pct;
-                    ((Excel.Range)wsDetail.Cells[dRow, 4]).NumberFormat = "0.0\"%\"";
-
-                    lastItem = itemName;
-                    dRow++;
-                }
-
-                // Итоговая строка детализации
-                dRow++;
-                wsDetail.Cells[dRow, 2] = "ИТОГО:";
-                ((Excel.Range)wsDetail.Cells[dRow, 2]).Font.Bold = true;
-                wsDetail.Cells[dRow, 3] = grandTotal;
-                ((Excel.Range)wsDetail.Cells[dRow, 3]).NumberFormat = "#,##0.00";
-                ((Excel.Range)wsDetail.Cells[dRow, 3]).Font.Bold = true;
-                Excel.Range totRng = wsDetail.Range[wsDetail.Cells[dRow, 1], wsDetail.Cells[dRow, 4]];
-                totRng.Interior.Color = ColorTranslator.ToOle(Color.FromArgb(31, 73, 125));
-                totRng.Font.Color = ColorTranslator.ToOle(Color.White);
-                totRng.Font.Bold = true;
-
-                wsDetail.Columns[1].ColumnWidth = 28;
-                wsDetail.Columns[2].ColumnWidth = 28;
-                wsDetail.Columns[3].ColumnWidth = 16;
-                wsDetail.Columns[4].ColumnWidth = 10;
-
-                // Активируем лист с диаграммой
-                wsChart.Activate();
-
-                // Сохранить
-                string path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    $"PieChart_{dtpStart.Value:yyyyMMdd}_{dtpEnd.Value:yyyyMMdd}.xlsx");
-
-                workbook.SaveAs(path);
-                MessageBox.Show($"Диаграмма сохранена:\n{path}", "Готово",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo
-                    { FileName = path, UseShellExecute = true });
-                Close();
-            }
-            catch (Exception ex)
+            // Добавление точек
+            foreach (var emp in empData)
             {
-                MessageBox.Show("Ошибка при создании диаграммы:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                series.Points.AddXY(emp.Employee, emp.Total);
             }
-            finally
+
+            // Отображение процентов
+            foreach (DataPoint point in series.Points)
             {
-                if (workbook  != null) { workbook.Close(false); System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook); }
-                if (excelApp  != null) { excelApp.Quit();       System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp); }
-                if (wsChart   != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsChart);
-                if (wsDetail  != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(wsDetail);
+                point.Label = $"{point.AxisLabel}: {point.YValues[0]:N2} руб. ({point.YValues[0] / series.Points.Sum(p => p.YValues[0]) * 100:F1}%)";
+                point.LegendText = point.AxisLabel;
             }
+
+            // Детализация в DataGridView
+            dgvDetail.DataSource = dt;
+            dgvDetail.Columns["cost_item_name"].HeaderText = "Статья затрат";
+            dgvDetail.Columns["employee_name"].HeaderText = "Сотрудник";
+            dgvDetail.Columns["total_amount"].HeaderText = "Сумма";
+            dgvDetail.Columns["total_amount"].DefaultCellStyle.Format = "N2";
         }
 
-        private DataTable GetDataFromDb()
+        private DataTable GetData()
         {
             DataTable result = new DataTable();
             try
             {
-                var ids = clbCostItems.CheckedItems
-                    .Cast<CostItemRow>()
+                var selectedIds = clbCostItems.CheckedItems
+                    .Cast<dynamic>()
                     .Select(x => x.Id.ToString())
                     .ToArray();
-                string idsParam = string.Join(",", ids);
+                if (selectedIds.Length == 0) return result;
+                string ids = string.Join(",", selectedIds);
 
                 string sql = $@"
-                    SELECT
-                        ci.name  AS cost_item_name,
-                        e.name   AS employee_name,
+                    SELECT 
+                        ci.name AS cost_item_name,
+                        e.name AS employee_name,
                         SUM(arl.quantity * ci.price) AS total_amount
                     FROM advancereportline arl
-                    JOIN costitem ci       ON ci.id  = arl.cost_item_id
-                    JOIN advancereport ar  ON ar.id  = arl.report_id
-                    JOIN employee e        ON e.id   = ar.employee_id
-                    WHERE ar.report_date BETWEEN :startDate AND :endDate
-                      AND ci.id IN ({idsParam})
+                    JOIN costitem ci ON ci.id = arl.cost_item_id
+                    JOIN advancereport ar ON ar.id = arl.report_id
+                    JOIN employee e ON e.id = ar.employee_id
+                    WHERE ar.report_date::date BETWEEN :start AND :end
+                      AND ci.id IN ({ids})
                     GROUP BY ci.name, e.name
-                    ORDER BY ci.name, e.name";
+                    ORDER BY e.name, ci.name";
 
                 NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
-                cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
-                cmd.Parameters.AddWithValue("endDate",   dtpEnd.Value.Date);
+                cmd.Parameters.AddWithValue("start", dtpStart.Value.Date);
+                cmd.Parameters.AddWithValue("end", dtpEnd.Value.Date);
                 NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
                 da.Fill(result);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ошибка загрузки данных:\n" + ex.Message,
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Ошибка данных: " + ex.Message);
                 return null;
             }
             return result;
-        }
-
-        private class CostItemRow
-        {
-            public int    Id   { get; set; }
-            public string Name { get; set; }
-            public override string ToString() => Name;
         }
     }
 }
