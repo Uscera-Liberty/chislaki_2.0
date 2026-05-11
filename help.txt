@@ -10,10 +10,8 @@ namespace MyZadacha
     public class ReportExcel : Form
     {
         private NpgsqlConnection con;
-        private DateTimePicker dtpStart;
-        private DateTimePicker dtpEnd;
-        private Button btnExport;
-        private Button btnCancel;
+        private DateTimePicker dtpStart, dtpEnd;
+        private Button btnExport, btnCancel;
         private Label lblInfo;
 
         public ReportExcel(NpgsqlConnection connection)
@@ -24,7 +22,7 @@ namespace MyZadacha
 
         private void InitializeComponent()
         {
-            this.Text = "Налоговый отчёт за период (Excel)";
+            this.Text = "Налоговый отчёт за период";
             this.Size = new Size(450, 200);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -32,23 +30,23 @@ namespace MyZadacha
 
             lblInfo = new Label
             {
-                Text = "Выберите период для формирования отчёта:",
+                Text = "Выберите период отчётов:",
                 Location = new Point(20, 20),
                 Size = new Size(400, 25),
                 Font = new Font("Arial", 10, FontStyle.Bold)
             };
 
-            Label lblStart = new Label { Text = "Начало периода:", Location = new Point(30, 60), Size = new Size(100, 25) };
-            dtpStart = new DateTimePicker { Location = new Point(140, 60), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
+            Label lblStart = new Label { Text = "Начало:", Location = new Point(30, 60), Size = new Size(60, 25) };
+            dtpStart = new DateTimePicker { Location = new Point(100, 60), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
 
-            Label lblEnd = new Label { Text = "Конец периода:", Location = new Point(30, 95), Size = new Size(100, 25) };
-            dtpEnd = new DateTimePicker { Location = new Point(140, 95), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
+            Label lblEnd = new Label { Text = "Конец:", Location = new Point(250, 60), Size = new Size(50, 25) };
+            dtpEnd = new DateTimePicker { Location = new Point(300, 60), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
 
             btnExport = new Button
             {
                 Text = "Сформировать и выгрузить",
-                Location = new Point(290, 75),
-                Size = new Size(130, 35),
+                Location = new Point(50, 110),
+                Size = new Size(160, 35),
                 BackColor = Color.LightGreen
             };
             btnExport.Click += BtnExport_Click;
@@ -56,8 +54,8 @@ namespace MyZadacha
             btnCancel = new Button
             {
                 Text = "Отмена",
-                Location = new Point(290, 120),
-                Size = new Size(130, 30)
+                Location = new Point(230, 110),
+                Size = new Size(100, 35)
             };
             btnCancel.Click += (s, e) => Close();
 
@@ -75,13 +73,56 @@ namespace MyZadacha
             ExportToExcel();
         }
 
+        private DataTable GetReportData()
+        {
+            DataTable dt = new DataTable();
+            try
+            {
+                string sql = @"
+                    WITH report_tax AS (
+                        SELECT 
+                            ar.id,
+                            ar.employee_id,
+                            e.name AS employee_name,
+                            ar.total_spent,
+                            EXISTS (
+                                SELECT 1 FROM cashpayment cp 
+                                WHERE cp.report_id = ar.id 
+                                AND cp.pay_date > ar.report_date
+                            ) AS paid_after_report
+                        FROM advancereport ar
+                        JOIN employee e ON e.id = ar.employee_id
+                        WHERE ar.report_date BETWEEN :startDate AND :endDate
+                    )
+                    SELECT 
+                        employee_name,
+                        SUM(total_spent) AS total_spent,
+                        SUM(CASE WHEN paid_after_report THEN total_spent ELSE 0 END) AS taxable_sum,
+                        SUM(CASE WHEN paid_after_report THEN total_spent * 0.13 ELSE 0 END) AS tax_sum
+                    FROM report_tax
+                    GROUP BY employee_name
+                    ORDER BY employee_name";
+
+                NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+                cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
+                cmd.Parameters.AddWithValue("endDate", dtpEnd.Value.Date);
+                NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
+                da.Fill(dt);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка загрузки данных: " + ex.Message);
+                return null;
+            }
+            return dt;
+        }
+
         private void ExportToExcel()
         {
-            DataTable reportData = GetReportData();
-            if (reportData == null || reportData.Rows.Count == 0)
+            DataTable data = GetReportData();
+            if (data == null || data.Rows.Count == 0)
             {
-                MessageBox.Show("Нет данных за выбранный период.", "Внимание",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Нет данных за выбранный период.", "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -99,109 +140,71 @@ namespace MyZadacha
 
                 // Заголовок
                 worksheet.Cells[1, 1] = "НАЛОГОВЫЙ ОТЧЁТ ПО ПОДОТЧЁТНЫМ СУММАМ";
-                Excel.Range titleRange = worksheet.Range[worksheet.Cells[1, 1], worksheet.Cells[1, 3]];
+                Excel.Range titleRange = worksheet.Range[worksheet.Cells[1, 1], worksheet.Cells[1, 4]];
                 titleRange.Merge();
                 titleRange.Font.Bold = true;
                 titleRange.Font.Size = 14;
                 titleRange.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
 
-                // Период и дата формирования
-                string startStr = dtpStart.Value.ToString("dd.MM.yyyy");
-                string endStr = dtpEnd.Value.ToString("dd.MM.yyyy");
-                worksheet.Cells[3, 1] = $"Период: {startStr} – {endStr}";
+                worksheet.Cells[3, 1] = $"Период: {dtpStart.Value:dd.MM.yyyy} – {dtpEnd.Value:dd.MM.yyyy}";
                 worksheet.Cells[3, 1].Font.Bold = true;
-                worksheet.Cells[4, 1] = $"Дата формирования: {DateTime.Now:dd.MM.yyyy HH:mm}";
 
-                // Шапка таблицы
-                int hRow = 6;
-                string[] cols = { "Сотрудник", "Сумма расходов (руб.)", "Выдано из кассы (руб.)", "Облагаемая налогом сумма (руб.)", "Сумма налога 13% (руб.)" };
-                for (int i = 0; i < cols.Length; i++)
+                // Шапка
+                int headerRow = 5;
+                string[] headers = { "Сотрудник", "Всего потрачено, руб.", "Облагаемая сумма, руб.", "Сумма налога (13%), руб." };
+                for (int i = 0; i < headers.Length; i++)
                 {
-                    worksheet.Cells[hRow, i + 1] = cols[i];
-                    Excel.Range cell = worksheet.Cells[hRow, i + 1];
-                    cell.Font.Bold = true;
-                    cell.Interior.Color = Color.FromArgb(68, 114, 196);
-                    cell.Font.Color = Color.White;
-                    cell.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
+                    worksheet.Cells[headerRow, i + 1] = headers[i];
+                    worksheet.Cells[headerRow, i + 1].Font.Bold = true;
+                    worksheet.Cells[headerRow, i + 1].Interior.Color = Color.FromArgb(68, 114, 196);
+                    worksheet.Cells[headerRow, i + 1].Font.Color = Color.White;
                 }
 
-                // Заполнение данных
-                int row = hRow + 1;
-                decimal totalSpent = 0;
-                decimal totalPaid = 0;
-                decimal totalTaxable = 0;
-                decimal totalTax = 0;
+                int dataRow = headerRow + 1;
+                decimal grandTotalSpent = 0, grandTaxable = 0, grandTax = 0;
 
-                foreach (DataRow dr in reportData.Rows)
+                foreach (DataRow row in data.Rows)
                 {
-                    string employeeName = dr["employee_name"].ToString();
-                    decimal spent = Convert.ToDecimal(dr["total_spent"]);
-                    decimal paid = Convert.ToDecimal(dr["total_paid"]);
-                    decimal taxable = Convert.ToDecimal(dr["taxable_sum"]);
-                    decimal tax = Convert.ToDecimal(dr["tax_sum"]);
+                    string emp = row["employee_name"].ToString();
+                    decimal spent = Convert.ToDecimal(row["total_spent"]);
+                    decimal taxable = Convert.ToDecimal(row["taxable_sum"]);
+                    decimal tax = Convert.ToDecimal(row["tax_sum"]);
 
-                    worksheet.Cells[row, 1] = employeeName;
-                    worksheet.Cells[row, 2] = spent;
-                    worksheet.Cells[row, 3] = paid;
-                    worksheet.Cells[row, 4] = taxable;
-                    worksheet.Cells[row, 5] = tax;
+                    worksheet.Cells[dataRow, 1] = emp;
+                    worksheet.Cells[dataRow, 2] = spent;
+                    worksheet.Cells[dataRow, 3] = taxable;
+                    worksheet.Cells[dataRow, 4] = tax;
 
-                    totalSpent += spent;
-                    totalPaid += paid;
-                    totalTaxable += taxable;
-                    totalTax += tax;
-
-                    if (row % 2 == 0)
-                    {
-                        Excel.Range range = worksheet.Range[worksheet.Cells[row, 1], worksheet.Cells[row, 5]];
-                        range.Interior.Color = Color.FromArgb(235, 241, 251);
-                    }
-                    row++;
+                    grandTotalSpent += spent;
+                    grandTaxable += taxable;
+                    grandTax += tax;
+                    dataRow++;
                 }
 
-                // Итоговая строка
-                int tRow = row + 1;
-                worksheet.Cells[tRow, 1] = "ИТОГО:";
-                worksheet.Cells[tRow, 1].Font.Bold = true;
-                worksheet.Cells[tRow, 2] = totalSpent;
-                worksheet.Cells[tRow, 2].Font.Bold = true;
-                worksheet.Cells[tRow, 3] = totalPaid;
-                worksheet.Cells[tRow, 3].Font.Bold = true;
-                worksheet.Cells[tRow, 4] = totalTaxable;
-                worksheet.Cells[tRow, 4].Font.Bold = true;
-                worksheet.Cells[tRow, 5] = totalTax;
-                worksheet.Cells[tRow, 5].Font.Bold = true;
+                // Итоги
+                worksheet.Cells[dataRow + 1, 1] = "ИТОГО:";
+                worksheet.Cells[dataRow + 1, 1].Font.Bold = true;
+                worksheet.Cells[dataRow + 1, 2] = grandTotalSpent;
+                worksheet.Cells[dataRow + 1, 3] = grandTaxable;
+                worksheet.Cells[dataRow + 1, 4] = grandTax;
+                worksheet.Range[worksheet.Cells[dataRow + 1, 2], worksheet.Cells[dataRow + 1, 4]].Font.Bold = true;
+                worksheet.Range[worksheet.Cells[dataRow + 1, 1], worksheet.Cells[dataRow + 1, 4]].Interior.Color = Color.FromArgb(255, 230, 153);
 
-                Excel.Range totalRange = worksheet.Range[worksheet.Cells[tRow, 1], worksheet.Cells[tRow, 5]];
-                totalRange.Interior.Color = Color.FromArgb(255, 230, 153);
-
-                // Формат чисел
-                Excel.Range numberRange = worksheet.Range[worksheet.Cells[hRow + 1, 2], worksheet.Cells[tRow, 5]];
-                numberRange.NumberFormat = "#,##0.00";
-
-                // Автоширина
                 worksheet.Columns[1].ColumnWidth = 30;
                 worksheet.Columns[2].ColumnWidth = 18;
-                worksheet.Columns[3].ColumnWidth = 18;
+                worksheet.Columns[3].ColumnWidth = 20;
                 worksheet.Columns[4].ColumnWidth = 22;
-                worksheet.Columns[5].ColumnWidth = 18;
+                worksheet.Range[worksheet.Cells[headerRow + 1, 2], worksheet.Cells[dataRow + 1, 4]].NumberFormat = "#,##0.00";
 
-                // Сохранение
-                string path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    $"TaxReport_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
-
+                string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), $"TaxReport_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
                 workbook.SaveAs(path);
-                MessageBox.Show($"Файл сохранён:\n{path}", "Готово",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                { FileName = path, UseShellExecute = true });
+                MessageBox.Show($"Файл сохранён:\n{path}", "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
                 Close();
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Ошибка Excel: " + ex.Message, "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Ошибка Excel: " + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -211,57 +214,6 @@ namespace MyZadacha
                 if (workbook != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook);
                 if (excelApp != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp);
             }
-        }
-
-        private DataTable GetReportData()
-        {
-            DataTable result = new DataTable();
-            try
-            {
-                DateTime startDate = dtpStart.Value.Date;
-                DateTime endDate = dtpEnd.Value.Date;
-
-                // Запрос без cashadvance
-                // Налог считается как 13% от разницы между total_spent и total_paid
-                // (если total_spent > total_paid, то облагается разница)
-                string sql = @"
-                    SELECT 
-                        e.name AS employee_name,
-                        SUM(ar.total_spent) AS total_spent,
-                        SUM(ar.total_paid) AS total_paid,
-                        SUM(
-                            CASE 
-                                WHEN ar.total_spent > ar.total_paid 
-                                THEN ar.total_spent - ar.total_paid 
-                                ELSE 0 
-                            END
-                        ) AS taxable_sum,
-                        SUM(
-                            CASE 
-                                WHEN ar.total_spent > ar.total_paid 
-                                THEN (ar.total_spent - ar.total_paid) * 0.13 
-                                ELSE 0 
-                            END
-                        ) AS tax_sum
-                    FROM advancereport ar
-                    JOIN employee e ON e.id = ar.employee_id
-                    WHERE ar.report_date::date BETWEEN :startDate AND :endDate
-                    GROUP BY e.name
-                    ORDER BY e.name";
-
-                NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
-                cmd.Parameters.AddWithValue("startDate", startDate);
-                cmd.Parameters.AddWithValue("endDate", endDate);
-                NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
-                da.Fill(result);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка загрузки данных: " + ex.Message, "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return null;
-            }
-            return result;
         }
     }
 }
