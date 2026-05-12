@@ -1,182 +1,43 @@
-Разбираю все проблемы по порядку.
+Давай разберём по шагам что происходит. Сначала проверю саму логику SQL изолированно.
 
-**Ошибка внешнего ключа при добавлении строки** — скорее всего `cost_item_id` ссылается на `costitem.id` но при пересоздании таблиц данные слетели, или `is_active` ещё в запросе фильтруется.
+**Главная проблема:** `pay_date > report_date` — скорее всего даты равны (оба сегодня), поэтому условие `>` никогда не выполняется. Нужно `>=`.
 
-**Логика налога по заданию:**
-```
-Потрачено: 500 руб (отчёт подан)
-Получено из кассы: 200 руб (ПОСЛЕ даты отчёта)
-Облагается налогом: 200 руб (то что получил после)
-Налог: 200 * 0.13 = 26 руб
-
-Потрачено: 500, получено: 700 → облагается 500 (не больше потраченного)
-Потрачено: 500, выплаты нет → налога нет
-Выплата ДО отчёта → налога нет
-```
+**Вторая проблема:** после пересоздания таблиц колонки `taxable_sum` и `tax_sum` убраны из `advancereport` — грид пытается их читать из таблицы, а их там нет.
 
 ---
 
-## ШАГ 1 — SQL пересоздание (запусти в pgAdmin полностью)
-
-```sql
--- Чистим всё
-DROP TRIGGER IF EXISTS trg_insert_report_line  ON advancereportline;
-DROP TRIGGER IF EXISTS trg_delete_report_line  ON advancereportline;
-DROP TRIGGER IF EXISTS trg_update_report_line  ON advancereportline;
-DROP FUNCTION IF EXISTS fn_insert_report_line();
-DROP FUNCTION IF EXISTS fn_delete_report_line();
-DROP FUNCTION IF EXISTS fn_update_report_line();
-
-DROP TABLE IF EXISTS cashpayment       CASCADE;
-DROP TABLE IF EXISTS advancereportline CASCADE;
-DROP TABLE IF EXISTS advancereport     CASCADE;
-DROP TABLE IF EXISTS costitem          CASCADE;
-DROP TABLE IF EXISTS employee          CASCADE;
-
--- Сотрудники
-CREATE TABLE employee (
-    id    SERIAL PRIMARY KEY,
-    name  VARCHAR(150) NOT NULL,
-    city  VARCHAR(100),
-    phone VARCHAR(20)
-);
-
--- Статьи затрат (БЕЗ is_active)
-CREATE TABLE costitem (
-    id      SERIAL PRIMARY KEY,
-    name    VARCHAR(100)  NOT NULL,
-    price   NUMERIC(12,2) NOT NULL DEFAULT 0,
-    metrics VARCHAR(20)   NOT NULL DEFAULT 'шт'
-);
-
--- Авансовый отчёт (только total_spent триггером, налог считается в запросах)
-CREATE TABLE advancereport (
-    id           SERIAL PRIMARY KEY,
-    employee_id  INTEGER NOT NULL REFERENCES employee(id) ON DELETE CASCADE,
-    report_date  DATE    NOT NULL DEFAULT CURRENT_DATE,
-    period_start DATE,
-    period_end   DATE,
-    purpose      VARCHAR(255),
-    total_spent  NUMERIC(12,2) NOT NULL DEFAULT 0
-);
-
--- Строки отчёта
-CREATE TABLE advancereportline (
-    id           SERIAL PRIMARY KEY,
-    report_id    INTEGER       NOT NULL
-                     REFERENCES advancereport(id) ON DELETE CASCADE,
-    cost_item_id INTEGER       NOT NULL
-                     REFERENCES costitem(id) ON DELETE RESTRICT,
-    quantity     NUMERIC(10,3) NOT NULL DEFAULT 1
-);
-
--- Выплаты из кассы — привязаны к сотруднику, НЕ к отчёту
-CREATE TABLE cashpayment (
-    id          SERIAL PRIMARY KEY,
-    employee_id INTEGER       NOT NULL
-                    REFERENCES employee(id) ON DELETE CASCADE,
-    pay_date    DATE          NOT NULL DEFAULT CURRENT_DATE,
-    amount      NUMERIC(12,2) NOT NULL,
-    note        VARCHAR(255)
-);
-
--- Триггер INSERT строки → прибавить к total_spent
-CREATE OR REPLACE FUNCTION fn_insert_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = NEW.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = total_spent + (NEW.quantity * v_price)
-    WHERE id = NEW.report_id;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_insert_report_line
-AFTER INSERT ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_insert_report_line();
-
--- Триггер DELETE строки → вычесть из total_spent
-CREATE OR REPLACE FUNCTION fn_delete_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = OLD.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = GREATEST(0, total_spent - (OLD.quantity * v_price))
-    WHERE id = OLD.report_id;
-    RETURN OLD;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_delete_report_line
-AFTER DELETE ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_delete_report_line();
-
--- Триггер UPDATE строки → пересчитать total_spent
-CREATE OR REPLACE FUNCTION fn_update_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = NEW.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = GREATEST(0,
-        total_spent - (OLD.quantity * v_price) + (NEW.quantity * v_price))
-    WHERE id = NEW.report_id;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_update_report_line
-AFTER UPDATE ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_update_report_line();
-```
-
----
-
-## ШАГ 2 — ReportForm.cs — заменить Update()
+## ReportForm.cs — заменить Update() полностью
 
 ```csharp
 public void Update()
 {
-    // ПРАВИЛЬНАЯ ЛОГИКА ПО ЗАДАНИЮ:
-    // Работник СНАЧАЛА потратил свои деньги (подал отчёт),
-    // ПОТОМ получил деньги из кассы (pay_date > report_date).
-    // Облагается налогом: сумма выплат которые пришли ПОСЛЕ отчёта,
-    // но не больше чем потрачено.
-    // Если выплата пришла ДО отчёта — это аванс, налога нет.
-    // Если выплат после отчёта нет вообще — налога нет.
+    // Налог считается на лету в SQL.
+    // Логика: выплата >= дата отчёта означает
+    // "сначала потратил свои, потом получил из кассы" = налог 13%
+    // Облагаемая = MIN(потрачено, сумма выплат после отчёта)
     String sql = @"
         SELECT
             ar.id,
-            e.name          AS employee_name,
+            e.name         AS employee_name,
             ar.report_date,
             ar.period_start,
             ar.period_end,
             ar.purpose,
             ar.total_spent,
-            -- Выплаты ДО даты отчёта (аванс)
             COALESCE((
                 SELECT SUM(cp.amount)
                 FROM cashpayment cp
                 WHERE cp.employee_id = ar.employee_id
-                  AND cp.pay_date <= ar.report_date
             ), 0) AS total_paid,
-            -- Облагаемая сумма = выплаты ПОСЛЕ отчёта, но не больше потраченного
             LEAST(
                 ar.total_spent,
                 COALESCE((
                     SELECT SUM(cp.amount)
                     FROM cashpayment cp
                     WHERE cp.employee_id = ar.employee_id
-                      AND cp.pay_date > ar.report_date
+                      AND cp.pay_date >= ar.report_date
                 ), 0)
             ) AS taxable_sum,
-            -- Налог 13% от облагаемой суммы
             ROUND(
                 LEAST(
                     ar.total_spent,
@@ -184,7 +45,7 @@ public void Update()
                         SELECT SUM(cp.amount)
                         FROM cashpayment cp
                         WHERE cp.employee_id = ar.employee_id
-                          AND cp.pay_date > ar.report_date
+                          AND cp.pay_date >= ar.report_date
                     ), 0)
                 ) * 0.13
             , 2) AS tax_sum
@@ -204,7 +65,7 @@ public void Update()
     dataGridView1.Columns[4].HeaderText = "Конец периода";
     dataGridView1.Columns[5].HeaderText = "Цель";
     dataGridView1.Columns[6].HeaderText = "Потрачено";
-    dataGridView1.Columns[7].HeaderText = "Аванс (до отчёта)";
+    dataGridView1.Columns[7].HeaderText = "Выдано";
     dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
     dataGridView1.Columns[9].HeaderText = "Налог (13%)";
     this.StartPosition = FormStartPosition.CenterScreen;
@@ -213,7 +74,7 @@ public void Update()
 
 ---
 
-## ШАГ 3 — ReportExcel.cs — заменить GetReportData()
+## ReportExcel.cs — заменить GetReportData() полностью
 
 ```csharp
 private DataTable GetReportData()
@@ -221,43 +82,37 @@ private DataTable GetReportData()
     DataTable result = new DataTable();
     try
     {
-        // Та же логика что в ReportForm,
-        // но группируем по сотруднику за выбранный период
         string sql = @"
             SELECT
                 e.name              AS employee_name,
                 SUM(ar.total_spent) AS total_spent,
-                -- Аванс (выплаты ДО даты каждого отчёта)
                 COALESCE((
                     SELECT SUM(cp.amount)
                     FROM cashpayment cp
                     WHERE cp.employee_id = e.id
-                      AND cp.pay_date <= MAX(ar.report_date)
                       AND cp.pay_date BETWEEN :startDate AND :endDate
                 ), 0) AS total_paid,
-                -- Облагаемая: выплаты ПОСЛЕ отчёта, не больше потраченного
                 SUM(
                     LEAST(
                         ar.total_spent,
                         COALESCE((
-                            SELECT SUM(cp.amount)
-                            FROM cashpayment cp
-                            WHERE cp.employee_id = ar.employee_id
-                              AND cp.pay_date > ar.report_date
-                              AND cp.pay_date BETWEEN :startDate AND :endDate
+                            SELECT SUM(cp2.amount)
+                            FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date >= ar.report_date
+                              AND cp2.pay_date BETWEEN :startDate AND :endDate
                         ), 0)
                     )
                 ) AS taxable_sum,
-                -- Налог 13%
                 ROUND(SUM(
                     LEAST(
                         ar.total_spent,
                         COALESCE((
-                            SELECT SUM(cp.amount)
-                            FROM cashpayment cp
-                            WHERE cp.employee_id = ar.employee_id
-                              AND cp.pay_date > ar.report_date
-                              AND cp.pay_date BETWEEN :startDate AND :endDate
+                            SELECT SUM(cp2.amount)
+                            FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date >= ar.report_date
+                              AND cp2.pay_date BETWEEN :startDate AND :endDate
                         ), 0)
                     )
                 ) * 0.13, 2) AS tax_sum
@@ -285,42 +140,60 @@ private DataTable GetReportData()
 
 ---
 
-## ШАГ 4 — AddReportLine.cs — убрать фильтр is_active (причина ошибки FK)
+## ВАЖНО — проверь это в pgAdmin прямо сейчас
 
-```csharp
-private void Update()
-{
-    // БЕЗ WHERE is_active — колонки is_active больше нет в таблице!
-    string sql1 = "SELECT id, name FROM costitem ORDER BY name";
-    NpgsqlDataAdapter da1 = new NpgsqlDataAdapter(sql1, con);
-    ds1.Reset();
-    da1.Fill(ds1);
-    dt1 = ds1.Tables[0];
-    comboBox2.DataSource    = dt1;
-    comboBox2.DisplayMember = "name";
-    comboBox2.ValueMember   = "id";
-}
+Выполни этот запрос чтобы увидеть что реально есть в базе:
+
+```sql
+-- Смотрим все отчёты и все выплаты
+SELECT 
+    ar.id,
+    e.name,
+    ar.report_date,
+    ar.total_spent
+FROM advancereport ar
+JOIN employee e ON e.id = ar.employee_id;
+
+SELECT 
+    cp.id,
+    e.name,
+    cp.pay_date,
+    cp.amount
+FROM cashpayment cp
+JOIN employee e ON e.id = cp.employee_id;
+
+-- Проверяем логику налога напрямую
+SELECT
+    ar.id,
+    e.name,
+    ar.report_date,
+    ar.total_spent,
+    COALESCE((
+        SELECT SUM(cp.amount)
+        FROM cashpayment cp
+        WHERE cp.employee_id = ar.employee_id
+          AND cp.pay_date >= ar.report_date
+    ), 0) AS paid_after,
+    LEAST(
+        ar.total_spent,
+        COALESCE((
+            SELECT SUM(cp.amount)
+            FROM cashpayment cp
+            WHERE cp.employee_id = ar.employee_id
+              AND cp.pay_date >= ar.report_date
+        ), 0)
+    ) AS taxable,
+    ROUND(LEAST(
+        ar.total_spent,
+        COALESCE((
+            SELECT SUM(cp.amount)
+            FROM cashpayment cp
+            WHERE cp.employee_id = ar.employee_id
+              AND cp.pay_date >= ar.report_date
+        ), 0)
+    ) * 0.13, 2) AS tax
+FROM advancereport ar
+JOIN employee e ON e.id = ar.employee_id;
 ```
 
----
-
-## Таблица сценариев — как теперь работает
-
-| Ситуация | Результат |
-|---|---|
-| Отчёт подан, выплат нет | Облагаемая = 0, Налог = 0 |
-| Выплата была ДО даты отчёта (аванс) | Облагаемая = 0, Налог = 0 |
-| Потрачено 500, выплата 200 после отчёта | Облагаемая = 200, Налог = 26 |
-| Потрачено 500, выплата 700 после отчёта | Облагаемая = 500, Налог = 65 |
-| Потрачено 500, выплата 500 после отчёта | Облагаемая = 500, Налог = 65 |
-
----
-
-## Итог — что менять
-
-| Файл | Что |
-|---|---|
-| **pgAdmin** | Запустить весь SQL из Шага 1 |
-| **ReportForm.cs** | Заменить `Update()` |
-| **ReportExcel.cs** | Заменить `GetReportData()` |
-| **AddReportLine.cs** | В методе `Update()` убрать `WHERE is_active = TRUE` |
+Запусти третий запрос и скажи что он показывает — тогда будет точно понятно где именно обрывается логика.
