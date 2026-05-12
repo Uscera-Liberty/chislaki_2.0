@@ -1,21 +1,11 @@
-ПОНЯЛ! Налог должен рассчитываться ОДИН РАЗ при создании отчёта и НЕ МЕНЯТЬСЯ при добавлении выплат
+Исправленные методы с правильной логикой налога
 
-То есть:
-
-1. Когда сотрудник создаёт отчёт (advancereport), сразу рассчитывается налог (по логике "разница или нет выплат")
-2. Налог сохраняется в таблицу (taxable_sum, tax_sum)
-3. При добавлении/изменении выплат налог НЕ ПЕРЕСЧИТЫВАЕТСЯ
-
----
-
-Исправление: не пересчитывать налог, а брать из таблицы
-
-1. ReportForm.cs – метод Update() (просто выводим то, что уже есть в БД)
+Отчёт в DataGridView (ReportForm.cs – метод Update)
 
 ```csharp
 public void Update()
 {
-    // Просто выводим данные из таблицы, не пересчитываем налог заново
+    // Налог = total_spent * 0.13, если есть выплата ПОСЛЕ даты отчёта
     string sql = @"
         SELECT 
             ar.id,
@@ -25,9 +15,28 @@ public void Update()
             ar.period_end,
             ar.purpose,
             ar.total_spent,
-            ar.total_paid,
-            ar.taxable_sum,
-            ar.tax_sum
+            COALESCE((
+                SELECT SUM(cp.amount)
+                FROM cashpayment cp
+                WHERE cp.employee_id = ar.employee_id
+                  AND cp.pay_date <= ar.report_date
+            ), 0) AS total_paid,
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 FROM cashpayment cp
+                    WHERE cp.employee_id = ar.employee_id
+                      AND cp.pay_date > ar.report_date
+                ) THEN ar.total_spent
+                ELSE 0
+            END AS taxable_sum,
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 FROM cashpayment cp
+                    WHERE cp.employee_id = ar.employee_id
+                      AND cp.pay_date > ar.report_date
+                ) THEN ROUND(ar.total_spent * 0.13, 2)
+                ELSE 0
+            END AS tax_sum
         FROM advancereport ar
         JOIN employee e ON e.id = ar.employee_id
         ORDER BY ar.report_date DESC";
@@ -45,45 +54,15 @@ public void Update()
     dataGridView1.Columns[4].HeaderText = "Конец периода";
     dataGridView1.Columns[5].HeaderText = "Цель";
     dataGridView1.Columns[6].HeaderText = "Потрачено";
-    dataGridView1.Columns[7].HeaderText = "Выдано";
+    dataGridView1.Columns[7].HeaderText = "Выдано (до даты отчёта)";
     dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
-    dataGridView1.Columns[9].HeaderText = "Налог (13%)";
+    dataGridView1.Columns[9].HeaderText = "Налог 13%";
     
     this.StartPosition = FormStartPosition.CenterScreen;
 }
 ```
 
----
-
-2. AddReport.cs – при создании отчёта рассчитываем налог и сохраняем
-
-В форме добавления отчёта, перед сохранением:
-
-```csharp
-private void CalculateAndSaveTax()
-{
-    // Получаем текущие выплаты по сотруднику
-    string sql = "SELECT COALESCE(SUM(amount), 0) FROM cashpayment WHERE employee_id = :empId";
-    NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
-    cmd.Parameters.AddWithValue("empId", employeeId);
-    decimal totalPaid = Convert.ToDecimal(cmd.ExecuteScalar());
-    
-    // Рассчитываем налог: разница между потраченным и выданным
-    decimal taxableSum = totalSpent > totalPaid ? totalSpent - totalPaid : 0;
-    decimal taxSum = taxableSum * 0.13m;
-    
-    // Сохраняем в advancereport поля taxable_sum и tax_sum
-    string insertSql = @"
-        INSERT INTO advancereport (employee_id, report_date, period_start, period_end, purpose, total_spent, total_paid, taxable_sum, tax_sum)
-        VALUES (:empId, :reportDate, :periodStart, :periodEnd, :purpose, :totalSpent, :totalPaid, :taxableSum, :taxSum)";
-    
-    // ... выполняем INSERT с этими значениями
-}
-```
-
----
-
-3. ReportExcel.cs – отчёт берёт налог из БД (не пересчитывает)
+Экспорт в Excel (ReportExcel.cs – метод GetReportData)
 
 ```csharp
 private DataTable GetReportData()
@@ -91,14 +70,35 @@ private DataTable GetReportData()
     DataTable result = new DataTable();
     try
     {
-        // Просто берём уже сохранённые значения из таблицы
         string sql = @"
             SELECT 
                 e.name AS employee_name,
                 SUM(ar.total_spent) AS total_spent,
-                SUM(ar.total_paid) AS total_paid,
-                SUM(ar.taxable_sum) AS taxable_sum,
-                SUM(ar.tax_sum) AS tax_sum
+                COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = e.id
+                ), 0) AS total_paid,
+                SUM(
+                    CASE 
+                        WHEN EXISTS (
+                            SELECT 1 FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date > ar.report_date
+                        ) THEN ar.total_spent
+                        ELSE 0
+                    END
+                ) AS taxable_sum,
+                ROUND(SUM(
+                    CASE 
+                        WHEN EXISTS (
+                            SELECT 1 FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date > ar.report_date
+                        ) THEN ar.total_spent * 0.13
+                        ELSE 0
+                    END
+                ), 2) AS tax_sum
             FROM advancereport ar
             JOIN employee e ON e.id = ar.employee_id
             WHERE ar.report_date BETWEEN :startDate AND :endDate
@@ -122,11 +122,13 @@ private DataTable GetReportData()
 
 ---
 
-Что нужно сделать:
+Что изменилось и как работает:
 
-1. В AddReport.cs – при создании отчёта рассчитать налог ОДИН РАЗ и записать в taxable_sum и tax_sum
-2. В ReportForm.cs – просто показывать то, что уже есть в таблице
-3. В ReportExcel.cs – брать налог из таблицы, не пересчитывать
-4. Добавление выплат (cashpayment) – НЕ ДОЛЖНО влиять на уже существующие отчёты
+Сценарий Результат
+Отчёт создан, выплат нет Налога нет (0)
+Отчёт создан, выплата уже была ДО даты отчёта Налога нет (0)
+Отчёт создан, выплата добавлена ПОСЛЕ даты отчёта Налог = 13% от всей суммы отчёта
 
-Теперь налог фиксируется при создании отчёта и больше не меняется
+Теперь при добавлении выплаты после создания отчёта налог появится и не исчезнет (при условии, что форма перезагрузится). Если налог пропадает после обновления — проверьте, что в базе дата выплаты действительно больше даты отчёта.
+
+Это полностью соответствует заданию: «если работник вначале отчитался, а потом получил деньги из кассы».
