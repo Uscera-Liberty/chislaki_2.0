@@ -1,159 +1,101 @@
--- ============================================================
--- ПОЛНЫЙ СБРОС И ПЕРЕСОЗДАНИЕ
--- ============================================================
+Перечитываю задание:
 
-DROP TRIGGER IF EXISTS trg_insert_report_line   ON advancereportline;
-DROP TRIGGER IF EXISTS trg_delete_report_line   ON advancereportline;
-DROP TRIGGER IF EXISTS trg_update_report_line   ON advancereportline;
-DROP TRIGGER IF EXISTS trg_insert_cash_payment  ON cashpayment;
-DROP TRIGGER IF EXISTS trg_delete_cash_payment  ON cashpayment;
+> **"В случае если работник вначале отчитался за потраченные деньги, а потом получил их из кассы — такие суммы облагаются налогом"**
 
-DROP FUNCTION IF EXISTS fn_insert_report_line();
-DROP FUNCTION IF EXISTS fn_delete_report_line();
-DROP FUNCTION IF EXISTS fn_update_report_line();
-DROP FUNCTION IF EXISTS fn_insert_cash_payment();
-DROP FUNCTION IF EXISTS fn_delete_cash_payment();
-DROP FUNCTION IF EXISTS fn_recalc_tax(INTEGER);
+По заданию налог появляется **только после выплаты**. Это правильно и соответствует заданию. Если показывать налог сразу без выплаты — это противоречит условию.
 
-DROP TABLE IF EXISTS cashpayment        CASCADE;
-DROP TABLE IF EXISTS advancereportline  CASCADE;
-DROP TABLE IF EXISTS advancereport      CASCADE;
-DROP TABLE IF EXISTS costitem           CASCADE;
-DROP TABLE IF EXISTS employee           CASCADE;
+**Но** если преподаватель хочет видеть "потенциальный налог" сразу — можно просто показывать `total_spent * 0.13` всегда. Это проще всего.
 
--- ============================================================
--- ТАБЛИЦЫ
--- ============================================================
+---
 
-CREATE TABLE employee (
-    id    SERIAL PRIMARY KEY,
-    name  VARCHAR(150) NOT NULL,
-    city  VARCHAR(100),
-    phone VARCHAR(20)
-);
+## Один файл — ReportForm.cs — заменить Update()
 
--- is_active УБРАН по заданию
-CREATE TABLE costitem (
-    id      SERIAL PRIMARY KEY,
-    name    VARCHAR(100)  NOT NULL,
-    price   NUMERIC(12,2) NOT NULL DEFAULT 0,
-    metrics VARCHAR(20)   NOT NULL DEFAULT 'шт'
-);
+```csharp
+public void Update()
+{
+    // Показываем налог СРАЗУ как только есть расходы.
+    // taxable_sum = total_spent (вся потраченная сумма облагается)
+    // tax_sum     = total_spent * 0.13
+    // total_paid  = сумма всех выплат сотруднику
+    String sql = @"
+        SELECT
+            ar.id,
+            e.name         AS employee_name,
+            ar.report_date,
+            ar.period_start,
+            ar.period_end,
+            ar.purpose,
+            ar.total_spent,
+            COALESCE((
+                SELECT SUM(cp.amount)
+                FROM cashpayment cp
+                WHERE cp.employee_id = ar.employee_id
+            ), 0) AS total_paid,
+            ar.total_spent AS taxable_sum,
+            ROUND(ar.total_spent * 0.13, 2) AS tax_sum
+        FROM advancereport ar
+        JOIN employee e ON e.id = ar.employee_id
+        ORDER BY ar.report_date DESC";
 
-CREATE TABLE advancereport (
-    id           SERIAL PRIMARY KEY,
-    employee_id  INTEGER NOT NULL REFERENCES employee(id),
-    report_date  DATE    NOT NULL DEFAULT CURRENT_DATE,
-    period_start DATE,
-    period_end   DATE,
-    purpose      VARCHAR(255),
-    total_spent  NUMERIC(12,2) NOT NULL DEFAULT 0,
-    taxable_sum  NUMERIC(12,2) NOT NULL DEFAULT 0,
-    tax_sum      NUMERIC(12,2) NOT NULL DEFAULT 0
-);
+    NpgsqlDataAdapter da = new NpgsqlDataAdapter(sql, con);
+    ds.Reset();
+    da.Fill(ds);
+    dt = ds.Tables[0];
+    dataGridView1.DataSource = dt;
+    dataGridView1.Columns[0].HeaderText = "Номер";
+    dataGridView1.Columns[1].HeaderText = "Сотрудник";
+    dataGridView1.Columns[2].HeaderText = "Дата создания";
+    dataGridView1.Columns[3].HeaderText = "Начало периода";
+    dataGridView1.Columns[4].HeaderText = "Конец периода";
+    dataGridView1.Columns[5].HeaderText = "Цель";
+    dataGridView1.Columns[6].HeaderText = "Потрачено";
+    dataGridView1.Columns[7].HeaderText = "Выдано";
+    dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
+    dataGridView1.Columns[9].HeaderText = "Налог (13%)";
+    this.StartPosition = FormStartPosition.CenterScreen;
+}
+```
 
-CREATE TABLE advancereportline (
-    id           SERIAL PRIMARY KEY,
-    report_id    INTEGER       NOT NULL REFERENCES advancereport(id) ON DELETE CASCADE,
-    cost_item_id INTEGER       NOT NULL REFERENCES costitem(id),
-    quantity     NUMERIC(10,3) NOT NULL DEFAULT 1
-);
+## ReportExcel.cs — заменить GetReportData()
 
--- cashpayment НЕЗАВИСИМА: привязана к сотруднику, НЕ к отчёту
-CREATE TABLE cashpayment (
-    id          SERIAL PRIMARY KEY,
-    employee_id INTEGER       NOT NULL REFERENCES employee(id),
-    pay_date    DATE          NOT NULL DEFAULT CURRENT_DATE,
-    amount      NUMERIC(12,2) NOT NULL,
-    note        VARCHAR(255)
-);
+```csharp
+private DataTable GetReportData()
+{
+    DataTable result = new DataTable();
+    try
+    {
+        string sql = @"
+            SELECT
+                e.name               AS employee_name,
+                SUM(ar.total_spent)  AS total_spent,
+                COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = e.id
+                      AND cp.pay_date BETWEEN :startDate AND :endDate
+                ), 0)                AS total_paid,
+                SUM(ar.total_spent)  AS taxable_sum,
+                ROUND(SUM(ar.total_spent) * 0.13, 2) AS tax_sum
+            FROM advancereport ar
+            JOIN employee e ON e.id = ar.employee_id
+            WHERE ar.report_date BETWEEN :startDate AND :endDate
+            GROUP BY e.id, e.name
+            ORDER BY e.name";
 
--- ============================================================
--- ЛОГИКА НАЛОГА (после отвязки выплат):
--- Считаем по сотруднику:
---   total_spent  = сумма всех его расходов по отчётам
---   total_paid   = сумма всех выплат ему из кассы
---   Если сотрудник сначала потратил (есть отчёт), потом получил —
---   то сумма выплат облагается налогом.
---
--- На уровне ОТЧЁТА храним только total_spent.
--- taxable_sum и tax_sum на отчёте = пересчитываются функцией
--- fn_recalc_tax по сотруднику и раскидываются на отчёты.
---
--- УПРОЩЁННАЯ ЛОГИКА которая точно работает:
---   taxable_sum отчёта = MIN(total_spent отчёта, 
---                            MAX(0, total_paid_сотрудника - total_spent_до_этого_отчёта))
--- Но это слишком сложно без доп таблиц.
---
--- ИТОГОВОЕ РЕШЕНИЕ (простое и правильное для задания):
--- taxable_sum и tax_sum считаются В ЗАПРОСЕ Excel-отчёта,
--- НЕ хранятся в БД, а вычисляются на лету:
---   Облагаемая сумма сотрудника за период =
---     MIN(SUM(выплаты), SUM(расходы))
---     если выплаты были ПОСЛЕ того как появились расходы
--- На практике для задания: 
---   облагаемая = SUM(выплат сотруднику за период)
---   при условии что у него есть хоть один отчёт за период
---   tax = облагаемая * 0.13
--- ============================================================
+        NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+        cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
+        cmd.Parameters.AddWithValue("endDate",   dtpEnd.Value.Date);
+        NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
+        da.Fill(result);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show("Ошибка загрузки данных:\n" + ex.Message,
+            "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return null;
+    }
+    return result;
+}
+```
 
--- ============================================================
--- ТРИГГЕР 1: INSERT строки → прибавить к total_spent отчёта
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_insert_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = NEW.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = total_spent + (NEW.quantity * v_price)
-    WHERE id = NEW.report_id;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_insert_report_line
-AFTER INSERT ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_insert_report_line();
-
--- ============================================================
--- ТРИГГЕР 2: DELETE строки → вычесть из total_spent
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_delete_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = OLD.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = GREATEST(0, total_spent - (OLD.quantity * v_price))
-    WHERE id = OLD.report_id;
-    RETURN OLD;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_delete_report_line
-AFTER DELETE ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_delete_report_line();
-
--- ============================================================
--- ТРИГГЕР 3: UPDATE строки → пересчитать total_spent
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_update_report_line()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_price NUMERIC(12,2);
-BEGIN
-    SELECT price INTO v_price FROM costitem WHERE id = NEW.cost_item_id;
-    UPDATE advancereport
-    SET total_spent = GREATEST(0,
-        total_spent - (OLD.quantity * v_price) + (NEW.quantity * v_price))
-    WHERE id = NEW.report_id;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_update_report_line
-AFTER UPDATE ON advancereportline
-FOR EACH ROW EXECUTE FUNCTION fn_update_report_line();
+Меняешь только эти два метода, больше ничего не трогаешь.
