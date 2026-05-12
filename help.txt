@@ -1,21 +1,21 @@
-ПОНЯЛ! Нужно: облагается налогом РАЗНИЦА между потраченным и выданным
+ПОНЯЛ! Налог должен рассчитываться ОДИН РАЗ при создании отчёта и НЕ МЕНЯТЬСЯ при добавлении выплат
 
-Правильная логика:
+То есть:
 
-· Если выдали 1000, а потратили 1500 → облагается 500 (разница)
-· Если выдали 1500, а потратили 1000 → облагается 0 (переплата не облагается)
-· Если выдали 0 → облагается вся сумма потраченного
-
-Формула: taxable = MAX(0, total_spent - total_paid)
+1. Когда сотрудник создаёт отчёт (advancereport), сразу рассчитывается налог (по логике "разница или нет выплат")
+2. Налог сохраняется в таблицу (taxable_sum, tax_sum)
+3. При добавлении/изменении выплат налог НЕ ПЕРЕСЧИТЫВАЕТСЯ
 
 ---
 
-1. ReportForm.cs – метод Update()
+Исправление: не пересчитывать налог, а брать из таблицы
+
+1. ReportForm.cs – метод Update() (просто выводим то, что уже есть в БД)
 
 ```csharp
 public void Update()
 {
-    // Логика: облагается разница между потраченным и выданным (если потрачено > выдано)
+    // Просто выводим данные из таблицы, не пересчитываем налог заново
     string sql = @"
         SELECT 
             ar.id,
@@ -25,37 +25,9 @@ public void Update()
             ar.period_end,
             ar.purpose,
             ar.total_spent,
-            COALESCE((
-                SELECT SUM(cp.amount)
-                FROM cashpayment cp
-                WHERE cp.employee_id = ar.employee_id
-            ), 0) AS total_paid,
-            CASE 
-                WHEN ar.total_spent > COALESCE((
-                    SELECT SUM(cp.amount)
-                    FROM cashpayment cp
-                    WHERE cp.employee_id = ar.employee_id
-                ), 0) THEN ar.total_spent - COALESCE((
-                    SELECT SUM(cp.amount)
-                    FROM cashpayment cp
-                    WHERE cp.employee_id = ar.employee_id
-                ), 0)
-                ELSE 0
-            END AS taxable_sum,
-            ROUND(
-                CASE 
-                    WHEN ar.total_spent > COALESCE((
-                        SELECT SUM(cp.amount)
-                        FROM cashpayment cp
-                        WHERE cp.employee_id = ar.employee_id
-                    ), 0) THEN (ar.total_spent - COALESCE((
-                        SELECT SUM(cp.amount)
-                        FROM cashpayment cp
-                        WHERE cp.employee_id = ar.employee_id
-                    ), 0)) * 0.13
-                    ELSE 0
-                END, 2
-            ) AS tax_sum
+            ar.total_paid,
+            ar.taxable_sum,
+            ar.tax_sum
         FROM advancereport ar
         JOIN employee e ON e.id = ar.employee_id
         ORDER BY ar.report_date DESC";
@@ -74,8 +46,8 @@ public void Update()
     dataGridView1.Columns[5].HeaderText = "Цель";
     dataGridView1.Columns[6].HeaderText = "Потрачено";
     dataGridView1.Columns[7].HeaderText = "Выдано";
-    dataGridView1.Columns[8].HeaderText = "Облагаемая сумма (разница)";
-    dataGridView1.Columns[9].HeaderText = "Налог 13%";
+    dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
+    dataGridView1.Columns[9].HeaderText = "Налог (13%)";
     
     this.StartPosition = FormStartPosition.CenterScreen;
 }
@@ -83,7 +55,35 @@ public void Update()
 
 ---
 
-2. ReportExcel.cs – метод GetReportData()
+2. AddReport.cs – при создании отчёта рассчитываем налог и сохраняем
+
+В форме добавления отчёта, перед сохранением:
+
+```csharp
+private void CalculateAndSaveTax()
+{
+    // Получаем текущие выплаты по сотруднику
+    string sql = "SELECT COALESCE(SUM(amount), 0) FROM cashpayment WHERE employee_id = :empId";
+    NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+    cmd.Parameters.AddWithValue("empId", employeeId);
+    decimal totalPaid = Convert.ToDecimal(cmd.ExecuteScalar());
+    
+    // Рассчитываем налог: разница между потраченным и выданным
+    decimal taxableSum = totalSpent > totalPaid ? totalSpent - totalPaid : 0;
+    decimal taxSum = taxableSum * 0.13m;
+    
+    // Сохраняем в advancereport поля taxable_sum и tax_sum
+    string insertSql = @"
+        INSERT INTO advancereport (employee_id, report_date, period_start, period_end, purpose, total_spent, total_paid, taxable_sum, tax_sum)
+        VALUES (:empId, :reportDate, :periodStart, :periodEnd, :purpose, :totalSpent, :totalPaid, :taxableSum, :taxSum)";
+    
+    // ... выполняем INSERT с этими значениями
+}
+```
+
+---
+
+3. ReportExcel.cs – отчёт берёт налог из БД (не пересчитывает)
 
 ```csharp
 private DataTable GetReportData()
@@ -91,40 +91,19 @@ private DataTable GetReportData()
     DataTable result = new DataTable();
     try
     {
-        // Логика: облагается разница MAX(0, total_spent - total_paid)
+        // Просто берём уже сохранённые значения из таблицы
         string sql = @"
-            WITH employee_totals AS (
-                SELECT 
-                    e.id AS employee_id,
-                    e.name AS employee_name,
-                    COALESCE(SUM(ar.total_spent), 0) AS total_spent,
-                    COALESCE((
-                        SELECT SUM(cp.amount)
-                        FROM cashpayment cp
-                        WHERE cp.employee_id = e.id
-                    ), 0) AS total_paid
-                FROM employee e
-                LEFT JOIN advancereport ar ON ar.employee_id = e.id
-                    AND ar.report_date BETWEEN :startDate AND :endDate
-                GROUP BY e.id, e.name
-            )
             SELECT 
-                employee_name,
-                total_spent,
-                total_paid,
-                CASE 
-                    WHEN total_spent > total_paid THEN total_spent - total_paid
-                    ELSE 0
-                END AS taxable_sum,
-                ROUND(
-                    CASE 
-                        WHEN total_spent > total_paid THEN (total_spent - total_paid) * 0.13
-                        ELSE 0
-                    END, 2
-                ) AS tax_sum
-            FROM employee_totals
-            WHERE total_spent > 0
-            ORDER BY employee_name";
+                e.name AS employee_name,
+                SUM(ar.total_spent) AS total_spent,
+                SUM(ar.total_paid) AS total_paid,
+                SUM(ar.taxable_sum) AS taxable_sum,
+                SUM(ar.tax_sum) AS tax_sum
+            FROM advancereport ar
+            JOIN employee e ON e.id = ar.employee_id
+            WHERE ar.report_date BETWEEN :startDate AND :endDate
+            GROUP BY e.name
+            ORDER BY e.name";
 
         NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
         cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
@@ -143,20 +122,11 @@ private DataTable GetReportData()
 
 ---
 
-Примеры работы:
+Что нужно сделать:
 
-Потрачено Выдано Облагаемая сумма Налог 13%
-1500 1000 500 65
-1000 1500 0 0
-2000 0 2000 260
-500 500 0 0
+1. В AddReport.cs – при создании отчёта рассчитать налог ОДИН РАЗ и записать в taxable_sum и tax_sum
+2. В ReportForm.cs – просто показывать то, что уже есть в таблице
+3. В ReportExcel.cs – брать налог из таблицы, не пересчитывать
+4. Добавление выплат (cashpayment) – НЕ ДОЛЖНО влиять на уже существующие отчёты
 
----
-
-Что изменилось:
-
-Что было Что стало
-Если есть выплата → налог 0 Если выплата МЕНЬШЕ потраченного → налог на РАЗНИЦУ
-Если нет выплаты → налог на всю сумму Если выплата БОЛЬШЕ или равна потраченному → налог 0
-
-Теперь всё точно по вашему требованию!
+Теперь налог фиксируется при создании отчёта и больше не меняется
