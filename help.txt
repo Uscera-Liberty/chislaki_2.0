@@ -1,26 +1,30 @@
-Перечитываю задание:
+Да, ты права! Правильная логика:
 
-> **"В случае если работник вначале отчитался за потраченные деньги, а потом получил их из кассы — такие суммы облагаются налогом"**
+```
+Выдали аванс: 500
+Потратил:    2000
+Разница:     2000 - 500 = 1500  ← вот это облагается налогом
+Налог:       1500 * 0.13 = 195
+```
 
-По заданию налог появляется **только после выплаты**. Это правильно и соответствует заданию. Если показывать налог сразу без выплаты — это противоречит условию.
-
-**Но** если преподаватель хочет видеть "потенциальный налог" сразу — можно просто показывать `total_spent * 0.13` всегда. Это проще всего.
+Потому что 500 он уже получил ДО того как потратил — это не облагается. А вот 1500 он потратил из своих и потом получит компенсацию — вот это налог.
 
 ---
 
-## Один файл — ReportForm.cs — заменить Update()
+## ReportForm.cs — заменить Update()
 
 ```csharp
 public void Update()
 {
-    // Показываем налог СРАЗУ как только есть расходы.
-    // taxable_sum = total_spent (вся потраченная сумма облагается)
-    // tax_sum     = total_spent * 0.13
-    // total_paid  = сумма всех выплат сотруднику
+    // ПРАВИЛЬНАЯ ЛОГИКА:
+    // Выдали аванс ДО отчёта = 500 (не облагается)
+    // Потратил = 2000
+    // Облагаемая = MAX(0, потрачено - аванс до отчёта) = 1500
+    // Налог = 1500 * 0.13 = 195
     String sql = @"
         SELECT
             ar.id,
-            e.name         AS employee_name,
+            e.name          AS employee_name,
             ar.report_date,
             ar.period_start,
             ar.period_end,
@@ -31,8 +35,24 @@ public void Update()
                 FROM cashpayment cp
                 WHERE cp.employee_id = ar.employee_id
             ), 0) AS total_paid,
-            ar.total_spent AS taxable_sum,
-            ROUND(ar.total_spent * 0.13, 2) AS tax_sum
+            GREATEST(0,
+                ar.total_spent - COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = ar.employee_id
+                      AND cp.pay_date < ar.report_date
+                ), 0)
+            ) AS taxable_sum,
+            ROUND(
+                GREATEST(0,
+                    ar.total_spent - COALESCE((
+                        SELECT SUM(cp.amount)
+                        FROM cashpayment cp
+                        WHERE cp.employee_id = ar.employee_id
+                          AND cp.pay_date < ar.report_date
+                    ), 0)
+                ) * 0.13
+            , 2) AS tax_sum
         FROM advancereport ar
         JOIN employee e ON e.id = ar.employee_id
         ORDER BY ar.report_date DESC";
@@ -56,6 +76,8 @@ public void Update()
 }
 ```
 
+---
+
 ## ReportExcel.cs — заменить GetReportData()
 
 ```csharp
@@ -66,16 +88,34 @@ private DataTable GetReportData()
     {
         string sql = @"
             SELECT
-                e.name               AS employee_name,
-                SUM(ar.total_spent)  AS total_spent,
+                e.name              AS employee_name,
+                SUM(ar.total_spent) AS total_spent,
                 COALESCE((
                     SELECT SUM(cp.amount)
                     FROM cashpayment cp
                     WHERE cp.employee_id = e.id
                       AND cp.pay_date BETWEEN :startDate AND :endDate
-                ), 0)                AS total_paid,
-                SUM(ar.total_spent)  AS taxable_sum,
-                ROUND(SUM(ar.total_spent) * 0.13, 2) AS tax_sum
+                ), 0) AS total_paid,
+                SUM(
+                    GREATEST(0,
+                        ar.total_spent - COALESCE((
+                            SELECT SUM(cp2.amount)
+                            FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date < ar.report_date
+                        ), 0)
+                    )
+                ) AS taxable_sum,
+                ROUND(SUM(
+                    GREATEST(0,
+                        ar.total_spent - COALESCE((
+                            SELECT SUM(cp2.amount)
+                            FROM cashpayment cp2
+                            WHERE cp2.employee_id = ar.employee_id
+                              AND cp2.pay_date < ar.report_date
+                        ), 0)
+                    )
+                ) * 0.13, 2) AS tax_sum
             FROM advancereport ar
             JOIN employee e ON e.id = ar.employee_id
             WHERE ar.report_date BETWEEN :startDate AND :endDate
@@ -98,4 +138,13 @@ private DataTable GetReportData()
 }
 ```
 
-Меняешь только эти два метода, больше ничего не трогаешь.
+---
+
+## Таблица сценариев
+
+| Аванс до отчёта | Потрачено | Облагаемая | Налог |
+|---|---|---|---|
+| 0 | 2000 | 2000 | 260 |
+| 500 | 2000 | 1500 | 195 |
+| 2000 | 2000 | 0 | 0 |
+| 3000 | 2000 | 0 | 0 |
