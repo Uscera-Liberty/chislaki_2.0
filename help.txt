@@ -1,241 +1,158 @@
-using Npgsql;
-using System;
-using System.Data;
-using System.Drawing;
-using System.Windows.Forms;
-using Excel = Microsoft.Office.Interop.Excel;
+Смотрю на логику внимательно.
 
-namespace MyZadacha
+**Проблема ясна:** после отвязки выплат от отчёта — триггеры на `cashpayment` были удалены, а `taxable_sum` и `tax_sum` в таблице `advancereport` больше никто не обновляет. Они всегда 0.
+
+**Решение:** налог считается НЕ в триггерах, а прямо в SQL-запросе в `ReportForm` и `ReportExcel` — на лету по сотруднику.
+
+---
+
+## ШАГ 1 — ReportForm.cs — исправить метод Update()
+
+Добавляем подсчёт налога прямо в SELECT через LEFT JOIN с cashpayment:
+
+```csharp
+public void Update()
 {
-    public class ReportExcel : Form
-    {
-        private NpgsqlConnection con;
-        private DateTimePicker dtpStart, dtpEnd;
-        private Button btnExport, btnCancel;
-        private Label lblInfo;
+    // Налог считается на лету:
+    // taxable = MIN(выплаты сотруднику, расходы по отчёту)
+    // tax     = taxable * 0.13
+    // Условие: расходы > 0 (сотрудник тратил свои деньги)
+    String sql = @"
+        SELECT 
+            ar.id,
+            e.name AS employee_name,
+            ar.report_date,
+            ar.period_start,
+            ar.period_end,
+            ar.purpose,
+            ar.total_spent,
+            COALESCE(paid.total_paid, 0) AS total_paid,
+            CASE 
+                WHEN ar.total_spent > 0 
+                THEN LEAST(COALESCE(paid.total_paid, 0), ar.total_spent)
+                ELSE 0 
+            END AS taxable_sum,
+            CASE 
+                WHEN ar.total_spent > 0 
+                THEN ROUND(
+                    LEAST(COALESCE(paid.total_paid, 0), ar.total_spent) * 0.13, 2)
+                ELSE 0 
+            END AS tax_sum
+        FROM advancereport ar
+        JOIN employee e ON e.id = ar.employee_id
+        LEFT JOIN (
+            SELECT employee_id, SUM(amount) AS total_paid
+            FROM cashpayment
+            GROUP BY employee_id
+        ) paid ON paid.employee_id = ar.employee_id
+        ORDER BY ar.report_date DESC";
 
-        public ReportExcel(NpgsqlConnection connection)
-        {
-            con = connection;
-            InitializeComponent();
-        }
-
-        private void InitializeComponent()
-        {
-            this.Text = "Налоговый отчёт за период";
-            this.Size = new Size(450, 200);
-            this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.MaximizeBox = false;
-
-            lblInfo = new Label
-            {
-                Text = "Выберите период отчётов:",
-                Location = new Point(20, 20),
-                Size = new Size(400, 25),
-                Font = new Font("Arial", 10, FontStyle.Bold)
-            };
-
-            Label lblStart = new Label { Text = "Начало:", Location = new Point(30, 60), Size = new Size(60, 25) };
-            dtpStart = new DateTimePicker { Location = new Point(100, 60), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
-
-            Label lblEnd = new Label { Text = "Конец:", Location = new Point(250, 60), Size = new Size(50, 25) };
-            dtpEnd = new DateTimePicker { Location = new Point(300, 60), Size = new Size(130, 25), Format = DateTimePickerFormat.Short };
-
-            btnExport = new Button
-            {
-                Text = "Сформировать и выгрузить",
-                Location = new Point(50, 110),
-                Size = new Size(160, 35),
-                BackColor = Color.LightGreen
-            };
-            btnExport.Click += BtnExport_Click;
-
-            btnCancel = new Button
-            {
-                Text = "Отмена",
-                Location = new Point(230, 110),
-                Size = new Size(100, 35)
-            };
-            btnCancel.Click += (s, e) => Close();
-
-            Controls.Add(lblInfo);
-            Controls.Add(lblStart);
-            Controls.Add(dtpStart);
-            Controls.Add(lblEnd);
-            Controls.Add(dtpEnd);
-            Controls.Add(btnExport);
-            Controls.Add(btnCancel);
-        }
-
-        private void BtnExport_Click(object sender, EventArgs e)
-        {
-            ExportToExcel();
-        }
-
-        private DataTable GetTaxReportData()
-        {
-            DataTable dt = new DataTable();
-            try
-            {
-                // Чёткая логика: отчёт облагается налогом, если есть хотя бы одна выплата (cashpayment)
-                // с pay_date > report_date. Сумма налога = total_spent * 0.13 для таких отчётов.
-                string sql = @"
-                    WITH taxable_reports AS (
-                        SELECT DISTINCT ar.employee_id, ar.id, ar.total_spent
-                        FROM advancereport ar
-                        WHERE ar.report_date BETWEEN :startDate AND :endDate
-                          AND EXISTS (
-                              SELECT 1 FROM cashpayment cp
-                              WHERE cp.report_id = ar.id
-                                AND cp.pay_date > ar.report_date
-                          )
-                    )
-                    SELECT 
-                        e.name AS employee_name,
-                        COALESCE(SUM(tr.total_spent), 0) AS taxable_sum,
-                        COALESCE(SUM(tr.total_spent * 0.13), 0) AS tax_sum
-                    FROM employee e
-                    LEFT JOIN taxable_reports tr ON tr.employee_id = e.id
-                    WHERE EXISTS (
-                        SELECT 1 FROM advancereport ar2 
-                        WHERE ar2.employee_id = e.id 
-                          AND ar2.report_date BETWEEN :startDate AND :endDate
-                    )
-                    GROUP BY e.name
-                    ORDER BY e.name";
-
-                using (NpgsqlCommand cmd = new NpgsqlCommand(sql, con))
-                {
-                    cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
-                    cmd.Parameters.AddWithValue("endDate", dtpEnd.Value.Date);
-                    using (NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd))
-                    {
-                        da.Fill(dt);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка расчёта налога: " + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return null;
-            }
-            return dt;
-        }
-
-        private void ExportToExcel()
-        {
-            DataTable data = GetTaxReportData();
-            if (data == null || data.Rows.Count == 0)
-            {
-                MessageBox.Show("Нет данных за выбранный период.", "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            Excel.Application excelApp = null;
-            Excel.Workbook workbook = null;
-            Excel.Worksheet worksheet = null;
-
-            try
-            {
-                excelApp = new Excel.Application();
-                excelApp.DisplayAlerts = false;
-                workbook = excelApp.Workbooks.Add();
-                worksheet = (Excel.Worksheet)workbook.Worksheets[1];
-                worksheet.Name = "Налоговый отчёт";
-
-                // ЗАГОЛОВОК
-                worksheet.Cells[1, 1] = "НАЛОГОВЫЙ ОТЧЁТ ПО ПОДОТЧЁТНЫМ СУММАМ";
-                Excel.Range titleRange = worksheet.Range[worksheet.Cells[1, 1], worksheet.Cells[1, 3]];
-                titleRange.Merge();
-                titleRange.Font.Bold = true;
-                titleRange.Font.Size = 14;
-                titleRange.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-
-                // ПЕРИОД
-                worksheet.Cells[3, 1] = $"Период: {dtpStart.Value:dd.MM.yyyy} – {dtpEnd.Value:dd.MM.yyyy}";
-                worksheet.Cells[3, 1].Font.Bold = true;
-
-                // ШАПКА ТАБЛИЦЫ
-                int headerRow = 5;
-                string[] headers = { "Сотрудник", "Облагаемая налогом сумма (руб.)", "Сумма налога 13% (руб.)" };
-                for (int i = 0; i < headers.Length; i++)
-                {
-                    worksheet.Cells[headerRow, i + 1] = headers[i];
-                    Excel.Range cell = worksheet.Cells[headerRow, i + 1];
-                    cell.Font.Bold = true;
-                    cell.Interior.Color = Color.FromArgb(68, 114, 196);
-                    cell.Font.Color = Color.White;
-                    cell.HorizontalAlignment = Excel.XlHAlign.xlHAlignCenter;
-                }
-
-                // ЗАПОЛНЕНИЕ ДАННЫХ
-                int dataRow = headerRow + 1;
-                decimal totalTaxable = 0;
-                decimal totalTax = 0;
-
-                foreach (DataRow row in data.Rows)
-                {
-                    string emp = row["employee_name"].ToString();
-                    decimal taxable = Convert.ToDecimal(row["taxable_sum"]);
-                    decimal tax = Convert.ToDecimal(row["tax_sum"]);
-
-                    worksheet.Cells[dataRow, 1] = emp;
-                    worksheet.Cells[dataRow, 2] = taxable;
-                    worksheet.Cells[dataRow, 3] = tax;
-
-                    totalTaxable += taxable;
-                    totalTax += tax;
-
-                    // Чередование цвета строк
-                    if (dataRow % 2 == 0)
-                    {
-                        Excel.Range range = worksheet.Range[worksheet.Cells[dataRow, 1], worksheet.Cells[dataRow, 3]];
-                        range.Interior.Color = Color.FromArgb(235, 241, 251);
-                    }
-                    dataRow++;
-                }
-
-                // ИТОГИ
-                int totalRow = dataRow + 1;
-                worksheet.Cells[totalRow, 1] = "ИТОГО:";
-                worksheet.Cells[totalRow, 1].Font.Bold = true;
-                worksheet.Cells[totalRow, 2] = totalTaxable;
-                worksheet.Cells[totalRow, 3] = totalTax;
-                worksheet.Range[worksheet.Cells[totalRow, 1], worksheet.Cells[totalRow, 3]].Font.Bold = true;
-                worksheet.Range[worksheet.Cells[totalRow, 1], worksheet.Cells[totalRow, 3]].Interior.Color = Color.FromArgb(255, 230, 153);
-
-                // АВТОШИРИНА
-                worksheet.Columns[1].ColumnWidth = 35;
-                worksheet.Columns[2].ColumnWidth = 25;
-                worksheet.Columns[3].ColumnWidth = 22;
-
-                // Убираем всякие NumberFormat – Excel сам отформатирует нормально
-                // Единственное, можно выровнять числа по правому краю:
-                Excel.Range numberRange = worksheet.Range[worksheet.Cells[headerRow + 1, 2], worksheet.Cells[totalRow, 3]];
-                numberRange.HorizontalAlignment = Excel.XlHAlign.xlHAlignRight;
-
-                // СОХРАНЕНИЕ
-                string path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    $"TaxReport_{DateTime.Now:yyyyMMdd_HHmm}.xlsx");
-                workbook.SaveAs(path);
-                MessageBox.Show($"Файл сохранён:\n{path}", "Готово", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
-                Close();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка Excel: " + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                if (workbook != null) workbook.Close(false);
-                if (excelApp != null) excelApp.Quit();
-                if (worksheet != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(worksheet);
-                if (workbook != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(workbook);
-                if (excelApp != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(excelApp);
-            }
-        }
-    }
+    NpgsqlDataAdapter da = new NpgsqlDataAdapter(sql, con);
+    ds.Reset();
+    da.Fill(ds);
+    dt = ds.Tables[0];
+    dataGridView1.DataSource = dt;
+    dataGridView1.Columns[0].HeaderText = "Номер";
+    dataGridView1.Columns[1].HeaderText = "Сотрудник";
+    dataGridView1.Columns[2].HeaderText = "Дата создания";
+    dataGridView1.Columns[3].HeaderText = "Начало периода";
+    dataGridView1.Columns[4].HeaderText = "Конец периода";
+    dataGridView1.Columns[5].HeaderText = "Цель";
+    dataGridView1.Columns[6].HeaderText = "Потрачено";
+    dataGridView1.Columns[7].HeaderText = "Выдано";
+    dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
+    dataGridView1.Columns[9].HeaderText = "Налог (13%)";
+    this.StartPosition = FormStartPosition.CenterScreen;
 }
+```
+
+---
+
+## ШАГ 2 — ReportExcel.cs — исправить метод GetReportData()
+
+Тот же принцип — считаем на лету, группируем по сотруднику за период:
+
+```csharp
+private DataTable GetReportData()
+{
+    DataTable result = new DataTable();
+    try
+    {
+        string sql = @"
+            SELECT
+                e.name AS employee_name,
+                COALESCE(spent.total_spent, 0) AS total_spent,
+                COALESCE(paid.total_paid, 0)   AS total_paid,
+                CASE
+                    WHEN COALESCE(spent.total_spent, 0) > 0
+                    THEN LEAST(
+                        COALESCE(paid.total_paid, 0),
+                        COALESCE(spent.total_spent, 0))
+                    ELSE 0
+                END AS taxable_sum,
+                CASE
+                    WHEN COALESCE(spent.total_spent, 0) > 0
+                    THEN ROUND(LEAST(
+                        COALESCE(paid.total_paid, 0),
+                        COALESCE(spent.total_spent, 0)) * 0.13, 2)
+                    ELSE 0
+                END AS tax_sum
+            FROM employee e
+            LEFT JOIN (
+                SELECT ar.employee_id,
+                       SUM(ar.total_spent) AS total_spent
+                FROM advancereport ar
+                WHERE ar.report_date BETWEEN :startDate AND :endDate
+                GROUP BY ar.employee_id
+            ) spent ON spent.employee_id = e.id
+            LEFT JOIN (
+                SELECT cp.employee_id,
+                       SUM(cp.amount) AS total_paid
+                FROM cashpayment cp
+                WHERE cp.pay_date BETWEEN :startDate AND :endDate
+                GROUP BY cp.employee_id
+            ) paid ON paid.employee_id = e.id
+            WHERE spent.employee_id IS NOT NULL
+               OR paid.employee_id IS NOT NULL
+            ORDER BY e.name";
+
+        NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
+        cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
+        cmd.Parameters.AddWithValue("endDate",   dtpEnd.Value.Date);
+        NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
+        da.Fill(result);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show("Ошибка загрузки данных:\n" + ex.Message,
+            "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        return null;
+    }
+    return result;
+}
+```
+
+---
+
+## ШАГ 3 — SQL в pgAdmin — убедись что taxable_sum и tax_sum есть в таблице
+
+Если они были удалены при пересоздании — добавь обратно (они нужны для хранения в гриде):
+
+```sql
+-- Проверь что колонки есть, если нет — добавь:
+ALTER TABLE advancereport 
+    ADD COLUMN IF NOT EXISTS taxable_sum NUMERIC(12,2) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS tax_sum     NUMERIC(12,2) NOT NULL DEFAULT 0;
+```
+
+---
+
+## Итог — что изменить
+
+| Файл | Что |
+|---|---|
+| **ReportForm.cs** | Заменить метод `Update()` |
+| **ReportExcel.cs** | Заменить метод `GetReportData()` |
+| **pgAdmin** | Выполнить `ALTER TABLE` выше |
+
+Триггеры трогать не нужно — они считают только `total_spent` (расходы по строкам). Налог теперь всегда считается свежим запросом на лету при каждом открытии формы и при каждом экспорте.
