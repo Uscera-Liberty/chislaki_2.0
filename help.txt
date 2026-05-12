@@ -1,41 +1,24 @@
-Перечитываю задание внимательно:
+ПОНЯЛ! НЕ ПО ДАТЕ, А ПРОСТО ПО НАЛИЧИЮ ЗАПИСИ В cashpayment
 
-> **"В случае если работник вначале отчитался за потраченные деньги, а потом получил их из кассы — такие суммы облагаются подоходным налогом по ставке 13%"**
+Логика:
 
----
+· Если у сотрудника есть хотя бы одна выплата по этому отчёту (cashpayment) → облагается налогом
+· Если нет выплат → налога нет
 
-## Правильная логика
-
-```
-Сотрудник СНАЧАЛА потратил свои деньги
-    → подал отчёт (есть запись в advancereport)
-    → ПОТОМ получил деньги из кассы (cashpayment.pay_date > advancereport.report_date)
-    → ЭТО облагается налогом 13%
-
-Сотрудник СНАЧАЛА получил аванс из кассы
-    → потом потратил и отчитался
-    → НЕ облагается налогом
-```
-
-**Ключевое условие:** `cashpayment.pay_date > advancereport.report_date`
-
-Именно это сравнение дат и определяет облагается ли сумма налогом. Сейчас у тебя выплата вообще не привязана к отчёту — значит нужно сравнивать по сотруднику: **если дата выплаты позже даты отчёта сотрудника**.
+Даты выплаты НЕ ПРОВЕРЯЕМ вообще.
 
 ---
 
-## ШАГ 1 — ReportForm.cs — заменить метод Update()
+1. ReportForm.cs – метод Update()
 
 ```csharp
 public void Update()
 {
-    // ПРАВИЛЬНАЯ ЛОГИКА:
-    // Налог = выплаты которые пришли ПОСЛЕ даты отчёта сотрудника
-    // То есть: cp.pay_date > ar.report_date
-    // Сначала потратил (отчёт) → потом получил (выплата) = налог
-    String sql = @"
+    // Логика: налог = total_spent * 0.13, если существует выплата (cashpayment) по этому отчёту
+    string sql = @"
         SELECT 
             ar.id,
-            e.name        AS employee_name,
+            e.name AS employee_name,
             ar.report_date,
             ar.period_start,
             ar.period_end,
@@ -46,18 +29,20 @@ public void Update()
                 FROM cashpayment cp
                 WHERE cp.employee_id = ar.employee_id
             ), 0) AS total_paid,
-            COALESCE((
-                SELECT SUM(cp.amount)
-                FROM cashpayment cp
-                WHERE cp.employee_id = ar.employee_id
-                  AND cp.pay_date > ar.report_date
-            ), 0) AS taxable_sum,
-            ROUND(COALESCE((
-                SELECT SUM(cp.amount)
-                FROM cashpayment cp
-                WHERE cp.employee_id = ar.employee_id
-                  AND cp.pay_date > ar.report_date
-            ), 0) * 0.13, 2) AS tax_sum
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 FROM cashpayment cp
+                    WHERE cp.employee_id = ar.employee_id
+                ) THEN ar.total_spent
+                ELSE 0
+            END AS taxable_sum,
+            CASE 
+                WHEN EXISTS (
+                    SELECT 1 FROM cashpayment cp
+                    WHERE cp.employee_id = ar.employee_id
+                ) THEN ROUND(ar.total_spent * 0.13, 2)
+                ELSE 0
+            END AS tax_sum
         FROM advancereport ar
         JOIN employee e ON e.id = ar.employee_id
         ORDER BY ar.report_date DESC";
@@ -67,6 +52,7 @@ public void Update()
     da.Fill(ds);
     dt = ds.Tables[0];
     dataGridView1.DataSource = dt;
+    
     dataGridView1.Columns[0].HeaderText = "Номер";
     dataGridView1.Columns[1].HeaderText = "Сотрудник";
     dataGridView1.Columns[2].HeaderText = "Дата создания";
@@ -77,13 +63,14 @@ public void Update()
     dataGridView1.Columns[7].HeaderText = "Выдано";
     dataGridView1.Columns[8].HeaderText = "Облагаемая сумма";
     dataGridView1.Columns[9].HeaderText = "Налог (13%)";
+    
     this.StartPosition = FormStartPosition.CenterScreen;
 }
 ```
 
 ---
 
-## ШАГ 2 — ReportExcel.cs — заменить метод GetReportData()
+2. ReportExcel.cs – метод GetReportData()
 
 ```csharp
 private DataTable GetReportData()
@@ -91,50 +78,50 @@ private DataTable GetReportData()
     DataTable result = new DataTable();
     try
     {
-        // ПРАВИЛЬНАЯ ЛОГИКА:
-        // Облагаемая сумма = выплаты ПОСЛЕ даты отчёта сотрудника
-        // cp.pay_date > ar.report_date означает:
-        //   сначала потратил свои → подал отчёт → потом получил из кассы
+        // Логика: облагаемая сумма = total_spent, если у сотрудника есть выплата (cashpayment)
+        // Дата выплаты НЕ ПРОВЕРЯЕТСЯ
         string sql = @"
-            SELECT
-                e.name AS employee_name,
-                SUM(ar.total_spent) AS total_spent,
-                COALESCE((
-                    SELECT SUM(cp.amount)
-                    FROM cashpayment cp
-                    WHERE cp.employee_id = e.id
-                      AND cp.pay_date BETWEEN :startDate AND :endDate
-                ), 0) AS total_paid,
-                COALESCE((
-                    SELECT SUM(cp.amount)
-                    FROM cashpayment cp
-                    WHERE cp.employee_id = e.id
-                      AND cp.pay_date > MIN(ar.report_date)
-                      AND cp.pay_date BETWEEN :startDate AND :endDate
-                ), 0) AS taxable_sum,
-                ROUND(COALESCE((
-                    SELECT SUM(cp.amount)
-                    FROM cashpayment cp
-                    WHERE cp.employee_id = e.id
-                      AND cp.pay_date > MIN(ar.report_date)
-                      AND cp.pay_date BETWEEN :startDate AND :endDate
-                ), 0) * 0.13, 2) AS tax_sum
-            FROM advancereport ar
-            JOIN employee e ON e.id = ar.employee_id
-            WHERE ar.report_date BETWEEN :startDate AND :endDate
-            GROUP BY e.id, e.name
-            ORDER BY e.name";
+            WITH employee_payments AS (
+                SELECT 
+                    e.id AS employee_id,
+                    e.name AS employee_name,
+                    COALESCE(SUM(cp.amount), 0) AS total_paid,
+                    CASE 
+                        WHEN COUNT(cp.id) > 0 THEN 1 
+                        ELSE 0 
+                    END AS has_payment
+                FROM employee e
+                LEFT JOIN cashpayment cp ON cp.employee_id = e.id
+                GROUP BY e.id, e.name
+            )
+            SELECT 
+                ep.employee_name,
+                COALESCE(SUM(ar.total_spent), 0) AS total_spent,
+                ep.total_paid,
+                CASE 
+                    WHEN ep.has_payment = 1 THEN COALESCE(SUM(ar.total_spent), 0)
+                    ELSE 0
+                END AS taxable_sum,
+                CASE 
+                    WHEN ep.has_payment = 1 THEN ROUND(COALESCE(SUM(ar.total_spent), 0) * 0.13, 2)
+                    ELSE 0
+                END AS tax_sum
+            FROM employee_payments ep
+            LEFT JOIN advancereport ar ON ar.employee_id = ep.employee_id
+                AND ar.report_date BETWEEN :startDate AND :endDate
+            GROUP BY ep.employee_name, ep.total_paid, ep.has_payment
+            HAVING COALESCE(SUM(ar.total_spent), 0) > 0
+            ORDER BY ep.employee_name";
 
         NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
         cmd.Parameters.AddWithValue("startDate", dtpStart.Value.Date);
-        cmd.Parameters.AddWithValue("endDate",   dtpEnd.Value.Date);
+        cmd.Parameters.AddWithValue("endDate", dtpEnd.Value.Date);
         NpgsqlDataAdapter da = new NpgsqlDataAdapter(cmd);
         da.Fill(result);
     }
     catch (Exception ex)
     {
-        MessageBox.Show("Ошибка загрузки данных:\n" + ex.Message,
-            "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        MessageBox.Show("Ошибка загрузки данных:\n" + ex.Message, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
         return null;
     }
     return result;
@@ -143,11 +130,25 @@ private DataTable GetReportData()
 
 ---
 
-## Итог — что изменить
+3. Метод ExportToExcel() (оставляем как есть, но вызываем новый GetReportData)
 
-| Файл | Метод |
-|---|---|
-| **ReportForm.cs** | Заменить `Update()` |
-| **ReportExcel.cs** | Заменить `GetReportData()` |
+В ReportExcel.cs метод ExportToExcel() НЕ МЕНЯЕТСЯ, он просто вызывает GetReportData(), который мы исправили выше.
 
-Теперь логика точно по заданию: **нет выплаты после отчёта → налога нет. Есть выплата после отчёта → налог 13% с суммы выплаты.**
+---
+
+Что изменилось:
+
+Что было Что стало
+Проверка cp.pay_date > ar.report_date УДАЛЕНО
+Проверка дат НЕТ
+Логика налога Если у сотрудника есть хотя бы одна запись в cashpayment → облагается вся сумма total_spent
+Если записей нет Налог = 0
+
+Теперь вы можете проверить: добавить вручную запись в cashpayment для сотрудника – сразу появится налог. Удалить запись – налог исчезнет.
+
+Проверка простая:
+
+· Есть строка в cashpayment с employee_id = сотрудник → налог есть
+· Нет строки → налога нет
+
+Всё!
