@@ -1,50 +1,65 @@
-Смотрю на логику внимательно.
+Перечитываю задание внимательно:
 
-**Проблема ясна:** после отвязки выплат от отчёта — триггеры на `cashpayment` были удалены, а `taxable_sum` и `tax_sum` в таблице `advancereport` больше никто не обновляет. Они всегда 0.
-
-**Решение:** налог считается НЕ в триггерах, а прямо в SQL-запросе в `ReportForm` и `ReportExcel` — на лету по сотруднику.
+> **"В случае если работник вначале отчитался за потраченные деньги, а потом получил их из кассы — такие суммы облагаются подоходным налогом по ставке 13%"**
 
 ---
 
-## ШАГ 1 — ReportForm.cs — исправить метод Update()
+## Правильная логика
 
-Добавляем подсчёт налога прямо в SELECT через LEFT JOIN с cashpayment:
+```
+Сотрудник СНАЧАЛА потратил свои деньги
+    → подал отчёт (есть запись в advancereport)
+    → ПОТОМ получил деньги из кассы (cashpayment.pay_date > advancereport.report_date)
+    → ЭТО облагается налогом 13%
+
+Сотрудник СНАЧАЛА получил аванс из кассы
+    → потом потратил и отчитался
+    → НЕ облагается налогом
+```
+
+**Ключевое условие:** `cashpayment.pay_date > advancereport.report_date`
+
+Именно это сравнение дат и определяет облагается ли сумма налогом. Сейчас у тебя выплата вообще не привязана к отчёту — значит нужно сравнивать по сотруднику: **если дата выплаты позже даты отчёта сотрудника**.
+
+---
+
+## ШАГ 1 — ReportForm.cs — заменить метод Update()
 
 ```csharp
 public void Update()
 {
-    // Налог считается на лету:
-    // taxable = MIN(выплаты сотруднику, расходы по отчёту)
-    // tax     = taxable * 0.13
-    // Условие: расходы > 0 (сотрудник тратил свои деньги)
+    // ПРАВИЛЬНАЯ ЛОГИКА:
+    // Налог = выплаты которые пришли ПОСЛЕ даты отчёта сотрудника
+    // То есть: cp.pay_date > ar.report_date
+    // Сначала потратил (отчёт) → потом получил (выплата) = налог
     String sql = @"
         SELECT 
             ar.id,
-            e.name AS employee_name,
+            e.name        AS employee_name,
             ar.report_date,
             ar.period_start,
             ar.period_end,
             ar.purpose,
             ar.total_spent,
-            COALESCE(paid.total_paid, 0) AS total_paid,
-            CASE 
-                WHEN ar.total_spent > 0 
-                THEN LEAST(COALESCE(paid.total_paid, 0), ar.total_spent)
-                ELSE 0 
-            END AS taxable_sum,
-            CASE 
-                WHEN ar.total_spent > 0 
-                THEN ROUND(
-                    LEAST(COALESCE(paid.total_paid, 0), ar.total_spent) * 0.13, 2)
-                ELSE 0 
-            END AS tax_sum
+            COALESCE((
+                SELECT SUM(cp.amount)
+                FROM cashpayment cp
+                WHERE cp.employee_id = ar.employee_id
+            ), 0) AS total_paid,
+            COALESCE((
+                SELECT SUM(cp.amount)
+                FROM cashpayment cp
+                WHERE cp.employee_id = ar.employee_id
+                  AND cp.pay_date > ar.report_date
+            ), 0) AS taxable_sum,
+            ROUND(COALESCE((
+                SELECT SUM(cp.amount)
+                FROM cashpayment cp
+                WHERE cp.employee_id = ar.employee_id
+                  AND cp.pay_date > ar.report_date
+            ), 0) * 0.13, 2) AS tax_sum
         FROM advancereport ar
         JOIN employee e ON e.id = ar.employee_id
-        LEFT JOIN (
-            SELECT employee_id, SUM(amount) AS total_paid
-            FROM cashpayment
-            GROUP BY employee_id
-        ) paid ON paid.employee_id = ar.employee_id
         ORDER BY ar.report_date DESC";
 
     NpgsqlDataAdapter da = new NpgsqlDataAdapter(sql, con);
@@ -68,9 +83,7 @@ public void Update()
 
 ---
 
-## ШАГ 2 — ReportExcel.cs — исправить метод GetReportData()
-
-Тот же принцип — считаем на лету, группируем по сотруднику за период:
+## ШАГ 2 — ReportExcel.cs — заменить метод GetReportData()
 
 ```csharp
 private DataTable GetReportData()
@@ -78,42 +91,38 @@ private DataTable GetReportData()
     DataTable result = new DataTable();
     try
     {
+        // ПРАВИЛЬНАЯ ЛОГИКА:
+        // Облагаемая сумма = выплаты ПОСЛЕ даты отчёта сотрудника
+        // cp.pay_date > ar.report_date означает:
+        //   сначала потратил свои → подал отчёт → потом получил из кассы
         string sql = @"
             SELECT
                 e.name AS employee_name,
-                COALESCE(spent.total_spent, 0) AS total_spent,
-                COALESCE(paid.total_paid, 0)   AS total_paid,
-                CASE
-                    WHEN COALESCE(spent.total_spent, 0) > 0
-                    THEN LEAST(
-                        COALESCE(paid.total_paid, 0),
-                        COALESCE(spent.total_spent, 0))
-                    ELSE 0
-                END AS taxable_sum,
-                CASE
-                    WHEN COALESCE(spent.total_spent, 0) > 0
-                    THEN ROUND(LEAST(
-                        COALESCE(paid.total_paid, 0),
-                        COALESCE(spent.total_spent, 0)) * 0.13, 2)
-                    ELSE 0
-                END AS tax_sum
-            FROM employee e
-            LEFT JOIN (
-                SELECT ar.employee_id,
-                       SUM(ar.total_spent) AS total_spent
-                FROM advancereport ar
-                WHERE ar.report_date BETWEEN :startDate AND :endDate
-                GROUP BY ar.employee_id
-            ) spent ON spent.employee_id = e.id
-            LEFT JOIN (
-                SELECT cp.employee_id,
-                       SUM(cp.amount) AS total_paid
-                FROM cashpayment cp
-                WHERE cp.pay_date BETWEEN :startDate AND :endDate
-                GROUP BY cp.employee_id
-            ) paid ON paid.employee_id = e.id
-            WHERE spent.employee_id IS NOT NULL
-               OR paid.employee_id IS NOT NULL
+                SUM(ar.total_spent) AS total_spent,
+                COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = e.id
+                      AND cp.pay_date BETWEEN :startDate AND :endDate
+                ), 0) AS total_paid,
+                COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = e.id
+                      AND cp.pay_date > MIN(ar.report_date)
+                      AND cp.pay_date BETWEEN :startDate AND :endDate
+                ), 0) AS taxable_sum,
+                ROUND(COALESCE((
+                    SELECT SUM(cp.amount)
+                    FROM cashpayment cp
+                    WHERE cp.employee_id = e.id
+                      AND cp.pay_date > MIN(ar.report_date)
+                      AND cp.pay_date BETWEEN :startDate AND :endDate
+                ), 0) * 0.13, 2) AS tax_sum
+            FROM advancereport ar
+            JOIN employee e ON e.id = ar.employee_id
+            WHERE ar.report_date BETWEEN :startDate AND :endDate
+            GROUP BY e.id, e.name
             ORDER BY e.name";
 
         NpgsqlCommand cmd = new NpgsqlCommand(sql, con);
@@ -134,25 +143,11 @@ private DataTable GetReportData()
 
 ---
 
-## ШАГ 3 — SQL в pgAdmin — убедись что taxable_sum и tax_sum есть в таблице
-
-Если они были удалены при пересоздании — добавь обратно (они нужны для хранения в гриде):
-
-```sql
--- Проверь что колонки есть, если нет — добавь:
-ALTER TABLE advancereport 
-    ADD COLUMN IF NOT EXISTS taxable_sum NUMERIC(12,2) NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS tax_sum     NUMERIC(12,2) NOT NULL DEFAULT 0;
-```
-
----
-
 ## Итог — что изменить
 
-| Файл | Что |
+| Файл | Метод |
 |---|---|
-| **ReportForm.cs** | Заменить метод `Update()` |
-| **ReportExcel.cs** | Заменить метод `GetReportData()` |
-| **pgAdmin** | Выполнить `ALTER TABLE` выше |
+| **ReportForm.cs** | Заменить `Update()` |
+| **ReportExcel.cs** | Заменить `GetReportData()` |
 
-Триггеры трогать не нужно — они считают только `total_spent` (расходы по строкам). Налог теперь всегда считается свежим запросом на лету при каждом открытии формы и при каждом экспорте.
+Теперь логика точно по заданию: **нет выплаты после отчёта → налога нет. Есть выплата после отчёта → налог 13% с суммы выплаты.**
