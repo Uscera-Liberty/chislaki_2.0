@@ -5,10 +5,7 @@ from .models import Painting, Artist, Style
 from .forms import PaintingForm, ArtistForm, StyleForm
 
 
-# ─── Картины ────────────────────────────────────────────────────────────────
-
 def painting_list(request):
-    """Главная страница — список всех картин."""
     paintings = Painting.objects.select_related('artist', 'style').all()
     query = request.GET.get('q', '')
     style_id = request.GET.get('style', '')
@@ -40,7 +37,6 @@ def painting_list(request):
 
 
 def painting_detail(request, pk):
-    """Детальный просмотр картины."""
     painting = get_object_or_404(Painting.objects.select_related('artist', 'style'), pk=pk)
     other_paintings = Painting.objects.filter(artist=painting.artist).exclude(pk=pk)[:4]
     context = {
@@ -51,7 +47,6 @@ def painting_detail(request, pk):
 
 
 def painting_add(request):
-    """Добавление новой картины."""
     if request.method == 'POST':
         form = PaintingForm(request.POST)
         if form.is_valid():
@@ -64,7 +59,6 @@ def painting_add(request):
 
 
 def painting_edit(request, pk):
-    """Редактирование картины."""
     painting = get_object_or_404(Painting, pk=pk)
     if request.method == 'POST':
         form = PaintingForm(request.POST, instance=painting)
@@ -82,7 +76,6 @@ def painting_edit(request, pk):
 
 
 def painting_delete(request, pk):
-    """Удаление картины."""
     painting = get_object_or_404(Painting, pk=pk)
     if request.method == 'POST':
         title = painting.title
@@ -92,23 +85,19 @@ def painting_delete(request, pk):
     return render(request, 'gallery/painting_confirm_delete.html', {'painting': painting})
 
 
-# ─── Художники ──────────────────────────────────────────────────────────────
 
 def artist_list(request):
-    """Список художников."""
     artists = Artist.objects.select_related('style').all()
     return render(request, 'gallery/artist_list.html', {'artists': artists})
 
 
 def artist_detail(request, pk):
-    """Детальный просмотр художника."""
     artist = get_object_or_404(Artist.objects.select_related('style'), pk=pk)
     paintings = artist.paintings.select_related('style').all()
     return render(request, 'gallery/artist_detail.html', {'artist': artist, 'paintings': paintings})
 
 
 def artist_add(request):
-    """Добавление художника."""
     if request.method == 'POST':
         form = ArtistForm(request.POST)
         if form.is_valid():
@@ -121,7 +110,6 @@ def artist_add(request):
 
 
 def artist_edit(request, pk):
-    """Редактирование художника."""
     artist = get_object_or_404(Artist, pk=pk)
     if request.method == 'POST':
         form = ArtistForm(request.POST, instance=artist)
@@ -136,16 +124,13 @@ def artist_edit(request, pk):
     })
 
 
-# ─── Стили ──────────────────────────────────────────────────────────────────
 
 def style_list(request):
-    """Список стилей."""
     styles = Style.objects.all()
     return render(request, 'gallery/style_list.html', {'styles': styles})
 
 
 def style_add(request):
-    """Добавление стиля."""
     if request.method == 'POST':
         form = StyleForm(request.POST)
         if form.is_valid():
@@ -158,7 +143,6 @@ def style_add(request):
 
 
 def style_edit(request, pk):
-    """Редактирование стиля."""
     style = get_object_or_404(Style, pk=pk)
     if request.method == 'POST':
         form = StyleForm(request.POST, instance=style)

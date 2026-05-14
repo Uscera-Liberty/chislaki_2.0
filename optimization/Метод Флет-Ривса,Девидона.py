@@ -1,7 +1,5 @@
 import math
 
-# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
-
 def norm(v):
     return sum(x*x for x in v) ** 0.5
 
@@ -41,6 +39,10 @@ def identity(n):
 def f(x):
     return 8*x[0]**2 + x[1]**2 - x[0]*x[1] + x[0]
 
+def f1(x):
+    x1, x2 = x[0], x[1]
+    return (x1 + 2 * x2 - 5) ** 4 + (x2 - 2) ** 2
+
 
 def numerical_gradient(x, h=1e-8):
     n = len(x)
@@ -67,7 +69,6 @@ def svenn_method(x, d, t0=0.0, delta=0.01):
     t = t0
     h = delta
     
-    # Определяем направление поиска
     f_t = phi(t)
     f_t_plus_h = phi(t + h)
     
@@ -79,7 +80,6 @@ def svenn_method(x, d, t0=0.0, delta=0.01):
         t_prev = t
         t = t + h
     
-    # Удваиваем шаг до выхода за минимум
     k = 0
     while True:
         t_new = t + 2**k * h
@@ -95,8 +95,6 @@ def svenn_method(x, d, t0=0.0, delta=0.01):
         
         if k > 100:  # Защита от бесконечного цикла
             break
-    
-    # Возвращаем упорядоченный интервал
     if t_prev < t:
         return t_prev, t
     else:
@@ -108,7 +106,6 @@ def golden_section_search(x, d, tol=1e-5):
     Поиск оптимального шага методом золотого сечения
     Сначала находим начальный интервал методом Свенна
     """
-    # Находим начальный интервал методом Свенна
     a, b = svenn_method(x, d)
     
     phi_const = (math.sqrt(5) - 1)/2
@@ -140,7 +137,7 @@ def golden_section_search(x, d, tol=1e-5):
 
 # ===== ФЛЕТЧЕР-РИВС =====
 
-def fletcher_reeves_method(x0, eps1=0.1, eps2=0.15, M=10):
+def fletcher_reeves_method(x0, eps1=0.0001, eps2=0.00015, M=10):
     n = len(x0)
     x = x0[:]
     k = 0
@@ -218,12 +215,8 @@ def fletcher_reeves_method(x0, eps1=0.1, eps2=0.15, M=10):
 
         grad_norm_prev = norm(grad_prev)
 
-        if k % n == 0:
-            beta = 0.0
-            print(f"  k = {k} ∈ J, β = 0")
-        else:
-            beta = (grad_norm**2)/(grad_norm_prev**2) if grad_norm_prev > 1e-10 else 0.0
-            print(f"  β = {beta:.6f}")
+        beta = (grad_norm**2)/(grad_norm_prev**2) if grad_norm_prev > 1e-10 else 0.0
+        print(f"  β = {beta:.6f}")
 
         d = vec_add(vec_mul_scalar(grad, -1), vec_mul_scalar(d, beta))
         print(f"  d^{k} = [{d[0]:.6f}, {d[1]:.6f}]ᵀ")
@@ -236,7 +229,7 @@ def fletcher_reeves_method(x0, eps1=0.1, eps2=0.15, M=10):
 
 # ===== DFP =====
 
-def davidon_fletcher_powell_method(x0, eps1=0.1, eps2=0.15, M=10):
+def davidon_fletcher_powell_method(x0, eps1=0.0001, eps2=0.000015, M=10):
     n = len(x0)
     x = x0[:]
     k = 0
@@ -356,9 +349,6 @@ def davidon_fletcher_powell_method(x0, eps1=0.1, eps2=0.15, M=10):
         print()
 
     return x
-
-
-# ===== MAIN =====
 
 def main():
     x0 = [2.0, 2.0]

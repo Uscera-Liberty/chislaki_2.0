@@ -30,14 +30,7 @@ def swann(f, x0, h=1.0):
         h *= 2.0
 
 def golden_section(f, a, b, tol=1e-10):
-    """
-    Метод золотого сечения для поиска минимума функции на отрезке [a, b].
-    f    : функция одной переменной
-    a, b : границы интервала
-    tol  : точность по длине интервала
-    возвращает точку минимума
-    """
-    phi = (math.sqrt(5) - 1) / 2   # золотое сечение ≈ 0.618
+    phi = (math.sqrt(5) - 1) / 2  
     x1 = b - phi * (b - a)
     x2 = a + phi * (b - a)
     f1, f2 = f(x1), f(x2)
@@ -144,7 +137,7 @@ def newton_method(f, x0, tol=1e-9, max_iter=200):
 # F(x,r^k) = f(x) + (r^k/2) * Σ[g_j(x)]²
 # Критерий останова: |g(x*)| < eps
 
-def penalty_method(f, eq_constraints, x0, r0=1.0, C=10.0, eps=1e-5, max_iter=15):
+def penalty_method(f, eq_constraints, x0, r0=1.0, C=10.0, eps=1e-20, max_iter=15):
     print("=" * 60)
     print("МЕТОД ШТРАФОВ (внешних штрафов)")
     print("=" * 60)
@@ -159,12 +152,12 @@ def penalty_method(f, eq_constraints, x0, r0=1.0, C=10.0, eps=1e-5, max_iter=15)
             return f(x) + (r / 2.0) * sum(g(x) ** 2 for g in eq_constraints)
 
         x = newton_method(F, x)
-        viol = math.sqrt(sum(g(x) ** 2 for g in eq_constraints))
+        neviaz = math.sqrt(sum(g(x) ** 2 for g in eq_constraints))
 
         print(f"  k={k:2d}  r={r:.4g}  x*={[round(xi, 6) for xi in x]}"
-              f"  f(x*)={round(f(x), 6)}  |g(x)|={round(viol, 8)}")
+              f"  f(x*)={round(f(x), 6)}  |g(x)|={round(neviaz, 8)}")
 
-        if viol <= eps:
+        if neviaz <= eps:
             break
         r *= C
 

@@ -1,8 +1,4 @@
-"""
-Запустите этот скрипт через:
-    python manage.py shell < gallery/initial_data.py
-или вручную внутри shell.
-"""
+
 import django
 import os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'painting_gallery.settings')

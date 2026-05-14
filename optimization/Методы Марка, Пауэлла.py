@@ -155,7 +155,7 @@ def golden_section_search(x, d, tol=1e-5):
     return (a + b) / 2
 
 
-def powell_method(x0, eps1=0.1, eps2=0.15, M=10):
+def powell_method2(x0, eps1=0.0001, eps2=0.00015, M=100):
     """
     Метод Пауэлла (метод сопряженных направлений)
     """
@@ -184,7 +184,7 @@ def powell_method(x0, eps1=0.1, eps2=0.15, M=10):
         print(f"  x_начало = [{x[0]:.6f}, {x[1]:.6f}]ᵀ")
         print(f"  f(x_начало) = {f(x):.6f}")
         
-        x_start = x[:]  # Сохраняем начальную точку цикла
+        x_start = x[:] 
         
         # Выполняем n одномерных минимизаций вдоль текущих направлений
         for i in range(n):
@@ -262,128 +262,130 @@ def powell_method(x0, eps1=0.1, eps2=0.15, M=10):
     print(f"\nДостигнуто максимальное число итераций M = {M}")
     return x
 
-
-def marquardt_method(x0, eps1=0.1, M=10, mu0=1.0):
+def powell_method(x0, eps1=0.0001, eps2=0.00015, M=50):
     """
-    Метод Марквардта согласно алгоритму из презентации (стр. 25)
+    Улучшенный метод Пауэлла с проверкой линейной независимости направлений
     """
     n = len(x0)
     x = x0[:]
     k = 0
-    mu = mu0
+    converged_twice = False
     
     print("\n" + "="*70)
-    print("МЕТОД МАРКВАРДТА")
+    print("МЕТОД ПАУЭЛЛА (УЛУЧШЕННАЯ ВЕРСИЯ)")
     print("="*70)
     print(f"Начальная точка: x⁰ = ({x[0]:.3f}, {x[1]:.3f})")
-    print(f"ε₁ = {eps1}, M = {M}")
-    print(f"μ⁰ = {mu0}")
-    print(f"Размерность задачи: n = {n}\n")
+    print(f"ε₁ = {eps1}, ε₂ = {eps2}, M = {M}")
     
-    # Шаг 2: Положить k = 0, μ^k = μ⁰
-    print(f"Итерация {k}:")
-    print(f"  μ^{k} = {mu:.3f}")
+    # Начальные направления - единичные орты
+    directions = [[1.0, 0.0], [0.0, 1.0]]
+    
+    # Запоминаем, какое уменьшение дало каждое направление
+    delta_f = [0.0, 0.0]
     
     while k < M:
-        # Шаг 3: Вычислить ∇f(x^k)
+        print(f"\nЦИКЛ {k}:")
+        print(f"  x_начало = [{x[0]:.6f}, {x[1]:.6f}]ᵀ, f = {f(x):.6f}")
+        
+        x_start = x[:]
+        f_start = f(x)
+        
+        # Минимизация вдоль текущих направлений и запись уменьшений
+        max_delta = -1.0
+        max_idx = 0
+        
+        for i in range(n):
+            d = directions[i]
+            f_before = f(x)
+            
+            t_opt = golden_section_search(x, d)
+            x = vec_add(x, vec_mul_scalar(d, t_opt))
+            
+            f_after = f(x)
+            current_delta = abs(f_before - f_after)
+            delta_f[i] = current_delta
+            
+            if current_delta > max_delta:
+                max_delta = current_delta
+                max_idx = i
+            
+            print(f"  Шаг {i+1}: t* = {t_opt:.6f}, Δf = {current_delta:.6f}")
+        
+        # Проверка сходимости
         grad = numerical_gradient(x)
         grad_norm = norm(grad)
         
-        print(f"  x^{k} = [{x[0]:.6f}, {x[1]:.6f}]ᵀ")
-        print(f"  f(x^{k}) = {f(x):.6f}")
-        print(f"  ∇f(x^{k}) = [{grad[0]:.6f}, {grad[1]:.6f}]ᵀ")
-        print(f"  ‖∇f(x^{k})‖ = {grad_norm:.6f}")
-        
-        # Шаг 4: Проверка критерия окончания
         if grad_norm < eps1:
-            print(f"\n  ✓ ‖∇f(x^{k})‖ < ε₁. Расчет окончен.")
-            print(f"  Найдена точка x* = [{x[0]:.6f}, {x[1]:.6f}]ᵀ")
+            print(f"  ✓ ‖∇f‖ < ε₁. Минимум найден!")
             return x
         
-        # Шаг 5: Проверка k ≥ M
-        if k >= M:
-            print(f"\n  Достигнуто предельное число итераций M = {M}")
-            break
+        x_diff = norm(vec_sub(x, x_start))
+        f_diff = abs(f(x) - f_start)
         
-        # Шаг 6: Вычислить H(x^k)
-        H = hessian_matrix(x)
-        print(f"  H(x^{k}) = [[{H[0][0]:.1f}, {H[0][1]:.1f}], [{H[1][0]:.1f}, {H[1][1]:.1f}]]")
+        if x_diff < eps2 and f_diff < eps2:
+            if converged_twice:
+                print(f"  ✓ Сходимость по x и f достигнута дважды")
+                return x
+            converged_twice = True
+        else:
+            converged_twice = False
         
-        while True:  # Внутренний цикл для подбора μ
-            # Шаг 7: Вычислить H(x^k) + μ^k·E
-            E = identity(n)
-            H_mu = mat_add(H, mat_mul_scalar(E, mu))
+        # Формируем новое направление
+        v = vec_sub(x, x_start)
+        v_norm = norm(v)
+        
+        print(f"  Новое направление v: ‖v‖ = {v_norm:.6f}")
+        
+        # Проверка линейной независимости
+        if v_norm > 1e-8:
+            # Дополнительная минимизация вдоль v
+            t_opt = golden_section_search(x, v)
+            x = vec_add(x, vec_mul_scalar(v, t_opt))
+            print(f"  Минимизация вдоль v: t* = {t_opt:.6f}")
             
-            print(f"\n  μ^{k} = {mu:.6f}")
-            print(f"  H(x^{k}) + μ^{k}·E = [[{H_mu[0][0]:.6f}, {H_mu[0][1]:.6f}], "
-                  f"[{H_mu[1][0]:.6f}, {H_mu[1][1]:.6f}]]")
-            
-            # Шаг 8: Найти обратную матрицу [H(x^k) + μ^k·E]⁻¹
-            try:
-                H_mu_inv = matrix_inverse_2x2(H_mu)
-                print(f"  [H(x^{k}) + μ^{k}·E]⁻¹ = [[{H_mu_inv[0][0]:.6f}, {H_mu_inv[0][1]:.6f}], "
-                      f"[{H_mu_inv[1][0]:.6f}, {H_mu_inv[1][1]:.6f}]]")
-            except ValueError as e:
-                print(f"  ✗ Ошибка: {e}")
-                mu = mu * 2
-                print(f"  Увеличиваем μ: μ^{k} = {mu:.6f}")
-                continue
-            
-            # Шаг 9: Вычислить d^k = -[H(x^k) + μ^k·E]⁻¹·∇f(x^k)
-            d = vec_mul_scalar(mat_vec(H_mu_inv, grad), -1.0)
-            print(f"  d^{k} = -[H + μE]⁻¹·∇f = [{d[0]:.6f}, {d[1]:.6f}]ᵀ")
-            
-            # Шаг 10: Вычислить x^(k+1) = x^k + d^k
-            x_new = vec_add(x, d)
-            f_old = f(x)
-            f_new = f(x_new)
-            
-            print(f"  x^{k+1} = x^{k} + d^{k} = [{x_new[0]:.6f}, {x_new[1]:.6f}]ᵀ")
-            print(f"  f(x^{k+1}) = {f_new:.6f}")
-            
-            # Шаг 11: Проверить выполнение условия f(x^(k+1)) < f(x^k)
-            print(f"\n  Проверка: f(x^{k+1}) < f(x^{k})?")
-            print(f"  {f_new:.6f} < {f_old:.6f}? ", end="")
-            
-            if f_new < f_old:
-                # a) если неравенство выполняется, то перейти к шагу 12
-                print("ДА")
-                x = x_new
-                k += 1
+            v_norm = norm(v)
+            if v_norm > 1e-8:
+                v_normalized = [v[0]/v_norm, v[1]/v_norm]
                 
-                # Шаг 12: Положить k = k+1, μ^(k+1) = μ^k / 2
-                mu = mu / 2
+                # Проверяем, не коллинеарно ли v существующим направлениям
+                is_independent = True
+                for d in directions:
+                    d_norm = norm(d)
+                    if d_norm > 1e-8:
+                        d_normalized = [d[0]/d_norm, d[1]/d_norm]
+                        dot_product = abs(v_normalized[0]*d_normalized[0] + v_normalized[1]*d_normalized[1])
+                        if dot_product > 0.999:  # Почти параллельны
+                            is_independent = False
+                            break
                 
-                print(f"\n  ✓ Условие выполнено. Переходим к следующей итерации.")
-                print(f"  Новое значение: μ^{k} = μ^{k-1} / 2 = {mu:.6f}")
-                
-                print(f"\nИтерация {k}:")
-                break  # Выход из внутреннего цикла
+                if is_independent:
+                    # Заменяем направление, давшее НАИМЕНЬШЕЕ уменьшение
+                    min_idx = 0 if delta_f[0] < delta_f[1] else 1
+                    directions[min_idx] = v
+                    print(f"  ✓ Направление {min_idx} заменено (независимое)")
+                else:
+                    print(f"  ⚠ Направление v линейно зависимо, пропускаем замену")
             else:
-                # б) если нет, то перейти к шагу 13
-                print("НЕТ")
-                
-                # Шаг 13: Положить μ^k = 2μ^k и перейти к шагу 7
-                mu = mu * 2
-                print(f"  ✗ Условие не выполнено. Увеличиваем μ^{k} = {mu:.6f}")
-                print(f"  Повторяем с шага 7...")
+                print(f"  ⚠ Направление v слишком мало, пропускаем")
+        else:
+            print(f"  ⚠ v ≈ 0, пропускаем обновление направлений")
         
-        print()
+        
+        k += 1
     
     print(f"\nДостигнуто максимальное число итераций M = {M}")
     return x
-
 
 def main():
     """Основная функция для тестирования методов"""
     
     # Начальная точка из задания
-    x0 = [2.0, 2.0]
+    x0 = [-100, -100]
     
     # Параметры
-    eps1 = 0.1
-    eps2 = 0.15
-    M = 10
+    eps1 = 0.0001
+    eps2 = 0.00015
+    M = 50
     
     print("\n" + "="*70)
     print("РЕШЕНИЕ ЗАДАЧИ 10: f(x) = 8x₁² + x₂² - x₁x₂ + x₁, x₀ = (2, 2)")
@@ -399,33 +401,7 @@ def main():
     print(f"Значение функции: f(x*) = {f(x_powell):.6f}")
     print(f"Норма градиента: ‖∇f(x*)‖ = {norm(numerical_gradient(x_powell)):.6f}")
     
-    # Метод Марквардта
-    x_marq = marquardt_method(x0, eps1, M)
     
-    print(f"\n{'='*70}")
-    print(f"РЕЗУЛЬТАТ МЕТОДА МАРКВАРДТА:")
-    print(f"{'='*70}")
-    print(f"Найденная точка: x* = [{x_marq[0]:.6f}, {x_marq[1]:.6f}]ᵀ")
-    print(f"Значение функции: f(x*) = {f(x_marq):.6f}")
-    print(f"Норма градиента: ‖∇f(x*)‖ = {norm(numerical_gradient(x_marq)):.6f}")
-    
-    # Анализ решения
-    print(f"\n{'='*70}")
-    print(f"АНАЛИЗ РЕШЕНИЯ:")
-    print(f"{'='*70}")
-    
-    H = hessian_matrix(x_marq)
-    print(f"Матрица Гессе H =")
-    print(f"  [[{H[0][0]:6.2f}, {H[0][1]:6.2f}]")
-    print(f"   [{H[1][0]:6.2f}, {H[1][1]:6.2f}]]")
-    
-    det1 = H[0][0]
-    det2 = H[0][0] * H[1][1] - H[0][1] * H[1][0]
-    print(f"\nГлавные миноры: Δ₁ = {det1:.2f}, Δ₂ = {det2:.2f}")
-    
-    if det1 > 0 and det2 > 0:
-        print("✓ H > 0 (положительно определена)")
-        print("✓ Точка является локальным (и глобальным) минимумом")
     
     # Точное решение
     x1_exact = -2/31
@@ -436,10 +412,8 @@ def main():
     print(f"f(x*) = {f([x1_exact, x2_exact]):.6f}")
     
     diff_powell = norm(vec_sub(x_powell, [x1_exact, x2_exact]))
-    diff_marq = norm(vec_sub(x_marq, [x1_exact, x2_exact]))
     
     print(f"\nПогрешность метода Пауэлла: ‖x_Powell - x_exact‖ = {diff_powell:.6f}")
-    print(f"Погрешность метода Марквардта: ‖x_Marq - x_exact‖ = {diff_marq:.6f}")
 
 
 if __name__ == "__main__":

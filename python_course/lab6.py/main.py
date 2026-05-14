@@ -9,16 +9,13 @@ from typing import Optional
 
 app = FastAPI()
 
-# Подключаем статические файлы
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Инициализация БД
 def init_db():
     conn = sqlite3.connect('painting.db')
     cursor = conn.cursor()
-    
-    # Таблица художников
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS artists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +26,7 @@ def init_db():
         )
     ''')
     
-    # Таблица картин
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS paintings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +39,7 @@ def init_db():
         )
     ''')
     
-    # Таблица выставок
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS exhibitions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,12 +97,12 @@ def populate_db():
 init_db()
 populate_db()
 
-# === ГЛАВНАЯ СТРАНИЦА ===
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-# === ПРОСМОТР ТАБЛИЦ ===
+
 @app.get("/tables", response_class=HTMLResponse)
 async def view_tables(request: Request):
     conn = sqlite3.connect('painting.db')
@@ -137,7 +134,7 @@ async def view_tables(request: Request):
         "exhibitions": exhibitions
     })
 
-# === ARTISTS ===
+
 @app.get("/artists")
 def get_artists():
     conn = sqlite3.connect('painting.db')
@@ -166,7 +163,7 @@ async def add_artist(
     conn.close()
     return RedirectResponse(url="/tables", status_code=303)
 
-# === PAINTINGS ===
+
 @app.get("/paintings")
 def get_paintings():
     conn = sqlite3.connect('painting.db')
@@ -236,7 +233,7 @@ async def add_exhibition(
     conn.close()
     return RedirectResponse(url="/tables", status_code=303)
 
-# === СТАТИСТИКА С ВИЗУАЛОМ ===
+
 @app.get("/stats/paintings-by-artist", response_class=HTMLResponse)
 async def paintings_by_artist(request: Request):
     conn = sqlite3.connect('painting.db')
@@ -324,7 +321,7 @@ async def artist_exhibitions(request: Request):
         "type": "artist_exhibitions"
     })
 
-# === ЭКСПОРТ/ИМПОРТ JSON ===
+#
 @app.get("/export/artists/json")
 def export_artists_json():
     conn = sqlite3.connect('painting.db')
