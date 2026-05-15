@@ -1,238 +1,248 @@
-Восьмая задача
-df['tr_day'] = df['tr_day'].astype(int)
+"""
+Лабораторная работа №8. Вариант 10.
+Задание 2, пункт 10:
+  Найти количество супермаркетов каждой из торговых сетей
+  (Пятёрочка, Магнит, Лента и др.) на заданном участке карты.
 
-mcc_counts = df['mcc_code'].value_counts()
-popular_mcc = mcc_counts[mcc_counts > 60000].index
-df_filtered = df[df['mcc_code'].isin(popular_mcc)]
+Файлы: 10.osm и 10-2.osm
+Положите их в ту же папку, что и этот скрипт, и запустите:
+  python lab8_task2_variant10.py
 
-grouped = (df_filtered.groupby(['tr_day', 'mcc_code'])['amount'].mean().unstack())
+Участок карты берётся АВТОМАТИЧЕСКИ из тега <bounds> в самом OSM-файле.
+Если тег <bounds> отсутствует — берутся min/max координат всех узлов файла.
+Никаких изменений в коде делать не нужно.
+"""
 
-mcc_labels = {
-    4814: "Телеком",
-    4829: "Денежные переводы",
-    5411: "Бакалейные магазины",
-    6010: "Финансовые институты",
-    6011: "Снятие наличных (ATM)"
+import xml.etree.ElementTree as ET
+from collections import Counter
+
+# ─────────────────────────────────────────────────────────────
+# Названия файлов (лежат рядом со скриптом)
+# ─────────────────────────────────────────────────────────────
+OSM_FILES = ["10.osm", "10-2.osm"]
+
+# ─────────────────────────────────────────────────────────────
+# Словарь торговых сетей: ключевое слово → название сети
+# ─────────────────────────────────────────────────────────────
+CHAIN_KEYWORDS = {
+    "пятёрочка":     "Пятёрочка",
+    "пятерочка":     "Пятёрочка",
+    "pyaterochka":   "Пятёрочка",
+    "магнит":        "Магнит",
+    "magnit":        "Магнит",
+    "лента":         "Лента",
+    "lenta":         "Лента",
+    "перекрёсток":   "Перекрёсток",
+    "perekrestok":   "Перекрёсток",
+    "ашан":          "Ашан",
+    "auchan":        "Ашан",
+    "карусель":      "Карусель",
+    "окей":          "О'КЕЙ",
+    "o'key":         "О'КЕЙ",
+    "okey":          "О'КЕЙ",
+    "дикси":         "Дикси",
+    "dixy":          "Дикси",
+    "spar":          "SPAR",
+    "спар":          "SPAR",
+    "metro":         "Metro C&C",
+    "fix price":     "Fix Price",
+    "fixprice":      "Fix Price",
+    "верный":        "Верный",
+    "вкусвилл":      "ВкусВилл",
+    "vkusvill":      "ВкусВилл",
+    "глобус":        "Глобус",
+    "билла":         "Билла",
+    "billa":         "Билла",
+    "семёрочка":     "Семёрочка",
+    "семерочка":     "Семёрочка",
+    "мираторг":      "Мираторг",
+    "красное&белое": "Красное&Белое",
+    "красное белое": "Красное&Белое",
+    "простор":       "Простор",
 }
-grouped = grouped.rename(columns=mcc_labels)
-plt.figure(figsize=(12,6))
-
-grouped.plot(ax=plt.gca())
-
-plt.axhline(0, color='black', linewidth=1)
-
-plt.xlabel("Day")
-plt.ylabel("Average transaction amount")
-plt.title("MCC code average amount dynamics by day")
-
-# Легенда снизу
-plt.legend(
-    loc='upper center',
-    bbox_to_anchor=(0.5, -0.15),
-    ncol=2,
-    frameon=False
-)
-
-plt.tight_layout()
-plt.show()
-Задача с титаником
-titanic['Age_group'] = pd.cut(
-    titanic['Age'],
-    bins=[0, 12, 18, 35, 60, 100],
-    labels=['Child', 'Teen', 'Young Adult', 'Adult', 'Senior']
-)
-age_surv = titanic.groupby('Survived')['Age'].mean()
-print(round(age_surv, 2))
-Девятая задача: 
-wine = pd.read_csv('winemag-data-130k-v2.csv', on_bad_lines='skip', engine='python')
-
-wine = wine.dropna(subset=['points', 'price', 'country']) # Удаляем пропуски
-
-#a
-wine['price_clean'] = pd.to_numeric(wine['price'], errors='coerce')
-wine = wine.dropna(subset=['price_clean'])
-
-wine['points_clean'] = pd.to_numeric(wine['points'], errors='coerce')
-wine = wine.dropna(subset=['points_clean'])
-
-# wine_clean = wine[wine['price_clean'] < 200].copy()
-wine_clean = wine.copy()
-
-plt.figure(figsize=(12, 6))
-plt.scatter(wine_clean['points'], wine_clean['price_clean'], alpha = 0.3, s = 3)
-
-plt.xlabel("Points")
-plt.ylabel("Price ")
-plt.title("Points vs Price")
-
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# b
-wine_clean2 = wine[wine['country'].str.len() < 20].copy()
-country_counts = wine_clean2['country'].value_counts()
-
-plt.figure(figsize=(12,6))
-
-country_counts.plot(kind='bar')
-
-plt.xlabel("Country")
-plt.ylabel("Number of Wines")
-plt.title("Number of Wines by Country")
-
-plt.tight_layout()
-plt.show()
 
 
-def matrix_multipli(A, v):
-    n = len(A)
-    result = [0.0]*n
-    for i in range(n):
-        for j in range(n):
-            result[i] += A[i][j] * v[j]
-    return result
+def get_tags(element) -> dict:
+    return {tag.get("k"): tag.get("v") for tag in element.findall("tag")}
 
-def vector_norm(v):
-    return sum(x**2 for x in v) ** 0.5
 
-def normalize(v):
-    norm = vector_norm(v)
-    if norm == 0:
-        raise ValueError("Нельзя нормализовать нулевой вектор")
-    return [x/norm for x in v]
+def normalize_chain(name: str) -> str:
+    if not name:
+        return "Без названия / неизвестно"
+    low = name.lower()
+    for keyword, chain in CHAIN_KEYWORDS.items():
+        if keyword in low:
+            return chain
+    return f"Другое ({name})"
 
-def skalar_product(v1,v2):
-    return sum(a*b for a,b in zip(v1,v2))
 
-def power_method(A, max_iter=1000, epsilon=1e-10, initial_vector=None, verbose=True):
-    
-    n = len(A)
+def get_node_coords(root) -> dict:
+    coords = {}
+    for node in root.findall("node"):
+        nid = node.get("id")
+        lat = node.get("lat")
+        lon = node.get("lon")
+        if nid and lat and lon:
+            coords[nid] = (float(lat), float(lon))
+    return coords
 
-    if not all(len(row) == n for row in A):
-        raise ValueError("Матрица должна быть квадратной")
 
-    if initial_vector is None:
-        y_current = [1.0] * n
+def get_way_center(way, node_coords: dict):
+    lats, lons = [], []
+    for nd in way.findall("nd"):
+        ref = nd.get("ref")
+        if ref in node_coords:
+            lat, lon = node_coords[ref]
+            lats.append(lat)
+            lons.append(lon)
+    if lats:
+        return sum(lats) / len(lats), sum(lons) / len(lons)
+    return None, None
+
+
+def get_bbox_from_file(root, node_coords: dict):
+    """
+    Читает bbox прямо из OSM-файла (тег <bounds>).
+    Если его нет — вычисляет по координатам всех узлов.
+    Это и есть «заданный участок карты».
+    """
+    bounds = root.find("bounds")
+    if bounds is not None:
+        return (float(bounds.get("minlat")),
+                float(bounds.get("minlon")),
+                float(bounds.get("maxlat")),
+                float(bounds.get("maxlon")))
+    if not node_coords:
+        return None
+    lats = [c[0] for c in node_coords.values()]
+    lons = [c[1] for c in node_coords.values()]
+    return min(lats), min(lons), max(lats), max(lons)
+
+
+def point_in_bbox(lat, lon, bbox):
+    if lat is None or lon is None or bbox is None:
+        return True
+    minlat, minlon, maxlat, maxlon = bbox
+    return minlat <= lat <= maxlat and minlon <= lon <= maxlon
+
+
+def is_supermarket(tags: dict) -> bool:
+    shop = tags.get("shop", "").lower()
+    return shop in ("supermarket", "grocery", "convenience")
+
+
+def process_file(filepath: str, chains: Counter, all_stores: list) -> int:
+    print(f"\n📂 Обрабатываем файл: {filepath}")
+    try:
+        tree = ET.parse(filepath)
+        root = tree.getroot()
+    except FileNotFoundError:
+        print(f"   ⚠️  Файл не найден: {filepath}")
+        print("      Скачайте по ссылке: https://cloud.mail.ru/public/XgEn/ybFcC2jzW")
+        print("      и положите рядом с этим скриптом.")
+        return 0
+    except ET.ParseError as e:
+        print(f"   ❌ Ошибка разбора XML: {e}")
+        return 0
+
+    node_coords = get_node_coords(root)
+    bbox = get_bbox_from_file(root, node_coords)
+
+    if bbox:
+        print(f"   📍 Участок карты: "
+              f"lat [{bbox[0]:.5f} … {bbox[2]:.5f}], "
+              f"lon [{bbox[1]:.5f} … {bbox[3]:.5f}]")
     else:
-        if len(initial_vector) != n:
-            raise ValueError(f"Длина начального вектора должна быть {n}")
-        y_current = list(initial_vector)
+        print("   📍 Участок карты: не определён, берём все объекты файла")
 
-    y_current = normalize(y_current)
-    
-    lambda_prev = 0.0
-    history = []
+    count = 0
 
-    
-    for k in range(1, max_iter + 1):
-        # Шаг 1: z^(k) = A · y^(k-1)
-        z = matrix_multipli(A, y_current)
- 
-        y_next = normalize(z)
+    # node
+    for node in root.findall("node"):
+        tags = get_tags(node)
+        if not is_supermarket(tags):
+            continue
+        lat = float(node.get("lat", 0))
+        lon = float(node.get("lon", 0))
+        if not point_in_bbox(lat, lon, bbox):
+            continue
+        name = tags.get("name", tags.get("name:ru", "")).strip()
+        chain = normalize_chain(name)
+        chains[chain] += 1
+        all_stores.append((name or "—", chain, filepath))
+        count += 1
 
-        # lambda^(k) = (y^(k))ᵀ · A · y^(k) - формула Рэлея
-        Ay = matrix_multipli(A, y_next)
-        lambda_current = skalar_product(y_next, Ay)
-        
-        history.append(lambda_current)
+    # way (здания)
+    for way in root.findall("way"):
+        tags = get_tags(way)
+        if not is_supermarket(tags):
+            continue
+        lat, lon = get_way_center(way, node_coords)
+        if not point_in_bbox(lat, lon, bbox):
+            continue
+        name = tags.get("name", tags.get("name:ru", "")).strip()
+        chain = normalize_chain(name)
+        chains[chain] += 1
+        all_stores.append((name or "—", chain, filepath))
+        count += 1
 
-        error = abs(lambda_current - lambda_prev)
-        
-        if (k <= 10 or k % 10 == 0 or error < epsilon):
-            print(f"Итерация {k:4d}: λ = {lambda_current:12.8f}, "
-                  f"погрешность = {error:.2e}")
-        
-        if error < epsilon:
-            print("-" * 70)
-            print(f"Сходимость достигнута на итерации {k}")
-            break
-        
-        y_current = y_next
-        lambda_prev = lambda_current
-    else:
-        print("-" * 70)
-        print(f"⚠Достигнуто максимальное число итераций ({max_iter})")
-    
-    print("=" * 70)
-    print("РЕЗУЛЬТАТЫ:")
-    print("=" * 70)
-    print(f"Старшее собственное значение λ₁ = {lambda_current:.10f}")
-    print(f"Старший собственный вектор y₁:")
-    for i, val in enumerate(y_current):
-        print(f"  y₁[{i}] = {val:12.8f}")
-    print("=" * 70)
-    
-    return lambda_current, y_current, k, history
+    # relation
+    for rel in root.findall("relation"):
+        tags = get_tags(rel)
+        if not is_supermarket(tags):
+            continue
+        name = tags.get("name", tags.get("name:ru", "")).strip()
+        chain = normalize_chain(name)
+        chains[chain] += 1
+        all_stores.append((name or "—", chain, filepath))
+        count += 1
 
-def verify_pair(A, eigenvalue, eigenvector, verbose=True):
-    n = len(A)
-    Ay = matrix_vector_multiply(A, eigenvector)
-    lambda_y = [eigenvalue * eigenvector[i] for i in range(n)]
+    print(f"   ✅ Найдено супермаркетов: {count}")
+    return count
 
-    diff = [Ay[i] - lambda_y[i] for i in range(n)]
-    residual = vector_norm(diff)
-    
-    if verbose:
-        print("\n" + "=" * 70)
-        print("ПРОВЕРКА СОБСТВЕННОЙ ПАРЫ")
-        print("=" * 70)
-        print("Должно выполняться: A·y = λ·y")
-        print(f"\nA·y = {[f'{x:.8f}' for x in Ay]}")
-        print(f"λ·y = {[f'{x:.8f}' for x in lambda_y]}")
-        print(f"\nНевязка ||A·y - λ·y|| = {residual:.2e}")
-        
-        if residual < 1e-8:
-            print("✓ Собственная пара найдена ТОЧНО!")
-        elif residual < 1e-5:
-            print("✓ Собственная пара найдена с хорошей точностью")
-        else:
-            print("⚠ Возможно, требуется больше итераций")
-        print("=" * 70)
-    
-    return residual
+
+def main():
+    print("=" * 65)
+    print("ЗАДАНИЕ 2, ПУНКТ 10 — Вариант 10")
+    print("Количество супермаркетов по торговым сетям")
+    print("на заданном участке карты")
+    print("=" * 65)
+
+    chains: Counter = Counter()
+    all_stores: list = []
+    total = 0
+
+    for filepath in OSM_FILES:
+        total += process_file(filepath, chains, all_stores)
+
+    print()
+    if total == 0:
+        print("Супермаркеты не найдены.")
+        print("Проверьте, что файлы 10.osm и 10-2.osm лежат рядом со скриптом.")
+        return
+
+    # Таблица по сетям
+    print("=" * 45)
+    print("ИТОГ: КОЛИЧЕСТВО ПО ТОРГОВЫМ СЕТЯМ")
+    print("=" * 45)
+    print(f"{'Торговая сеть':<30} {'Кол-во':>6}")
+    print("-" * 45)
+    for chain, cnt in sorted(chains.items(), key=lambda x: -x[1]):
+        print(f"{chain:<30} {cnt:>6}")
+    print("-" * 45)
+    print(f"{'ИТОГО':<30} {total:>6}")
+
+    # Подробный список
+    print()
+    print("=" * 65)
+    print("ПОДРОБНЫЙ СПИСОК ВСЕХ СУПЕРМАРКЕТОВ")
+    print("=" * 65)
+    print(f"{'№':<4} {'Название':<35} {'Торговая сеть':<25} {'Файл'}")
+    print("-" * 80)
+    for i, (name, chain, src) in enumerate(
+            sorted(all_stores, key=lambda x: x[1]), start=1):
+        print(f"{i:<4} {name:<35} {chain:<25} {src}")
+
 
 if __name__ == "__main__":
-    A1 = [
-        [4, 1, 1],
-        [1, 3, 2],
-        [1, 2, 2]
-    ]
-    
-    print("Матрица A:")
-    for row in A1:
-        print("  ", row)
-    print()
-    
-    # Решение
-    lambda1, y1, iterations, history = power_method(A1, epsilon=1e-10)
-    verify_pair(A1, lambda1, y1)
-
-    A2 = [
-        [2, -1, 0, 0],
-        [-1, 2, -1, 0],
-        [0, -1, 2, -1],
-        [0, 0, -1, 2]
-    ]
-    
-    print("Матрица A:")
-    for row in A2:
-        print("  ", row)
-    print()
-
-    lambda2, y2, iterations2, history2 = power_method(A2, epsilon=1e-12)
-    verify_pair(A2, lambda2, y2)
-
-    A3 = [
-        [5, 2, 0],
-        [2, 6, 2],
-        [0, 2, 7]
-    ]
-    
-    print("Матрица A:")
-    for row in A3:
-        print("  ", row)
-    print()
-    
-    lambda3, y3, iterations3, history3 = power_method(A3, epsilon=1e-10)
-    verify_pair(A3, lambda3, y3)
+    main()
